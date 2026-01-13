@@ -232,16 +232,25 @@ impl EventLoop {
             .collect::<Vec<_>>()
             .join("\n");
 
+        // Debug logging to trace hat routing
+        debug!("build_prompt: hat_id='{}', instructions.is_empty()={}", 
+               hat_id.as_str(), hat.instructions.is_empty());
+
         // Default planner and builder hats use specialized prompts per spec
         // Custom hats (or defaults with custom instructions) use build_custom_hat
         match hat_id.as_str() {
             "planner" if hat.instructions.is_empty() => {
+                debug!("build_prompt: routing to build_coordinator() for planner");
                 Some(self.instruction_builder.build_coordinator(&events_context))
             }
             "builder" if hat.instructions.is_empty() => {
+                debug!("build_prompt: routing to build_ralph() for builder");
                 Some(self.instruction_builder.build_ralph(&events_context))
             }
-            _ => Some(self.instruction_builder.build_custom_hat(hat, &events_context)),
+            _ => {
+                debug!("build_prompt: routing to build_custom_hat() for '{}'", hat_id.as_str());
+                Some(self.instruction_builder.build_custom_hat(hat, &events_context))
+            }
         }
     }
 
