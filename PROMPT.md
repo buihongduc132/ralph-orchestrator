@@ -1,3 +1,1 @@
-Implement the pty-mode spec
-
-Ensure it's thoroughly validated and dogfooded. 
+Implement the latest changes made to the event-loop spec
