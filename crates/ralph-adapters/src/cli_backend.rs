@@ -78,9 +78,9 @@ impl CliBackend {
     pub fn codex() -> Self {
         Self {
             command: "codex".to_string(),
-            args: vec![],
+            args: vec!["exec".to_string(), "--full-auto".to_string()],
             prompt_mode: PromptMode::Arg,
-            prompt_flag: Some("--prompt".to_string()),
+            prompt_flag: None, // Positional argument
         }
     }
 
@@ -88,9 +88,9 @@ impl CliBackend {
     pub fn amp() -> Self {
         Self {
             command: "amp".to_string(),
-            args: vec![],
-            prompt_mode: PromptMode::Stdin,
-            prompt_flag: None,
+            args: vec!["--dangerously-allow-all".to_string()],
+            prompt_mode: PromptMode::Arg,
+            prompt_flag: Some("-x".to_string()),
         }
     }
 
@@ -168,6 +168,26 @@ mod tests {
         assert_eq!(cmd, "gemini");
         assert!(args.is_empty());
         assert_eq!(stdin, Some("test prompt".to_string()));
+    }
+
+    #[test]
+    fn test_codex_backend() {
+        let backend = CliBackend::codex();
+        let (cmd, args, stdin) = backend.build_command("test prompt");
+
+        assert_eq!(cmd, "codex");
+        assert_eq!(args, vec!["exec", "--full-auto", "test prompt"]);
+        assert!(stdin.is_none());
+    }
+
+    #[test]
+    fn test_amp_backend() {
+        let backend = CliBackend::amp();
+        let (cmd, args, stdin) = backend.build_command("test prompt");
+
+        assert_eq!(cmd, "amp");
+        assert_eq!(args, vec!["--dangerously-allow-all", "-x", "test prompt"]);
+        assert!(stdin.is_none());
     }
 
     #[test]

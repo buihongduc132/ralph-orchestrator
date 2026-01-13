@@ -427,6 +427,49 @@ The orchestrator validates hat configurations:
 | Custom hats can't suppress core behaviors | Safety guardrail |
 | At least one hat can output completion promise | Ensure loop can terminate |
 
+## CLI Usage
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `ralph run` | Start orchestration loop (default) |
+| `ralph resume` | Resume from existing scratchpad |
+| `ralph events` | View event history |
+
+### Prompt Options
+
+| Flag | Description | Example |
+|------|-------------|---------|
+| `-p <text>` | Inline prompt text | `ralph run -p "Add login feature"` |
+| `-P <path>` | Prompt file path (overrides config) | `ralph run -P prompts/spec-sync.md` |
+
+**Precedence:** `-p` and `-P` are mutually exclusive. If neither is provided, uses `prompt_file` from config (default: `PROMPT.md`).
+
+**Inline prompt (`-p`)** is the common case—quick tasks without creating a file:
+```bash
+ralph run -p "Fix the broken tests in auth module"
+ralph run -p "Add input validation to the signup form"
+```
+
+**Prompt file (`-P`)** is for reusable prompts or complex instructions:
+```bash
+ralph run -P prompts/spec-sync.md
+ralph run --config presets/research.yml -P my-question.md
+```
+
+### Other Options
+
+| Flag | Description |
+|------|-------------|
+| `-c, --config <path>` | Config file (default: `ralph.yml`) |
+| `-v, --verbose` | Enable verbose output (shows stderr, debug logs) |
+| `--max-iterations <n>` | Override max iterations |
+| `--dry-run` | Show config without running |
+| `--pty` | Enable PTY mode for rich terminal UI |
+| `--observe` | PTY observation mode (no input forwarding) |
+| `--no-pty` | Disable PTY mode |
+
 ## CLI Backend
 
 Supports any headless CLI tool:
@@ -697,6 +740,28 @@ The orchestrator owns all spawned CLI processes and must ensure no orphaned proc
 - **Given** CLI backend writes to stderr
 - **When** output is accumulated for event parsing
 - **Then** stderr content is included regardless of verbose mode
+
+### Prompt Options
+
+- **Given** user runs `ralph run -p "Fix the tests"`
+- **When** loop initializes
+- **Then** "Fix the tests" is used as prompt content (inline text)
+
+- **Given** user runs `ralph run -P prompts/my-prompt.md`
+- **When** loop initializes
+- **Then** contents of `prompts/my-prompt.md` are used as prompt content
+
+- **Given** user runs `ralph run` without `-p` or `-P`
+- **When** loop initializes
+- **Then** contents of `prompt_file` from config are used (default: `PROMPT.md`)
+
+- **Given** user runs `ralph run -p "text" -P file.md`
+- **When** arguments are parsed
+- **Then** error is returned (mutually exclusive flags)
+
+- **Given** user runs `ralph run -P nonexistent.md`
+- **When** file does not exist
+- **Then** error is returned with helpful message
 
 ### Iteration Demarcation
 
