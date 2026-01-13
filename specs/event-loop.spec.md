@@ -467,6 +467,20 @@ Implement the login feature.
 | `max_consecutive_failures` | Terminate after N failures in a row |
 | `checkpoint_interval` | Git commit every N iterations |
 
+### Process Management
+
+The orchestrator owns all spawned CLI processes and must ensure no orphaned processes remain:
+
+| Scenario | Behavior |
+|----------|----------|
+| **Normal exit** | Wait for current CLI process to complete, then exit |
+| **SIGINT (Ctrl+C)** | Allow current iteration to finish gracefully, then exit |
+| **SIGTERM** | Send SIGTERM to child process, wait up to 5s, then SIGKILL if needed |
+| **SIGHUP / terminal close** | Same as SIGTERM—kill child process before exiting |
+| **Orchestrator crash** | Child processes inherit SIGKILL (process group leadership) |
+
+**Implementation requirement:** The orchestrator must run as a process group leader. All spawned CLI processes (Claude, Kiro, etc.) belong to this group. On termination, the entire process group receives the signal, preventing orphans.
+
 ## Acceptance Criteria
 
 ### Core Behaviors
@@ -554,6 +568,32 @@ Implement the login feature.
 - **Given** `checkpoint_interval: 5` in config
 - **When** iteration 5, 10, 15... completes
 - **Then** git commit is created
+
+### Process Management
+
+- **Given** orchestrator starts
+- **When** it spawns CLI processes
+- **Then** orchestrator runs as process group leader with children in the same group
+
+- **Given** user sends SIGINT (Ctrl+C)
+- **When** CLI process is running
+- **Then** current iteration completes, child process terminates, no orphans remain
+
+- **Given** user sends SIGTERM
+- **When** CLI process is running
+- **Then** SIGTERM is forwarded to child, orchestrator waits up to 5s, then SIGKILL if needed
+
+- **Given** terminal is closed (SIGHUP)
+- **When** CLI process is running
+- **Then** child process is terminated before orchestrator exits
+
+- **Given** orchestrator crashes or is killed with SIGKILL
+- **When** CLI process was running
+- **Then** process group signal propagation ensures child is also killed
+
+- **Given** any termination scenario
+- **When** `ps aux | grep claude` is run after Ralph exits
+- **Then** no Claude/Kiro processes from this session remain running
 
 ### Escape Hatches
 
@@ -644,6 +684,20 @@ Implement the login feature.
 - **Given** loop terminates
 - **When** termination log is emitted
 - **Then** message includes iteration count and cost
+
+### Iteration Demarcation
+
+- **Given** iteration N begins
+- **When** orchestrator starts the iteration
+- **Then** a visual separator is printed with iteration number, hat, elapsed time, and progress
+
+- **Given** user scrolls through terminal output
+- **When** looking for iteration boundaries
+- **Then** iteration starts are clearly distinguishable from agent output (box-drawing characters)
+
+- **Given** iteration separator is printed
+- **When** separator is examined
+- **Then** it includes: iteration number, hat emoji and name, elapsed time, progress (N/max)
 
 ## Event History & Debugging
 
@@ -807,6 +861,28 @@ When the loop terminates due to safeguards (not completion promise):
 ## Log Messages
 
 The orchestrator emits structured log messages at key points. Logs should be lighthearted and informative—Ralph has personality.
+
+### Iteration Demarcation
+
+Each iteration must be clearly demarcated in the output so users can visually distinguish where one iteration ends and another begins. This is critical for:
+- Debugging which iteration caused an issue
+- Understanding the flow between hats
+- Parsing logs after the fact
+
+**Required visual separator:**
+
+```
+═══════════════════════════════════════════════════════════════════════════════
+ ITERATION 3 │ 🔨 builder │ 2m 15s elapsed │ 3/100
+═══════════════════════════════════════════════════════════════════════════════
+```
+
+The separator includes:
+- Clear visual break (box-drawing characters)
+- Iteration number
+- Active hat (with emoji)
+- Elapsed time since loop start
+- Progress indicator (current/max)
 
 ### Lifecycle Messages
 
