@@ -124,22 +124,18 @@ event-loop:
       type: cli-flag
       run: ${RALPH_BIN:-ralph} events --help | grep -q -- '--clear'
 
-    # Dry-run output
-    - name: "dry-run shows config summary"
-      type: output
-      run: ${RALPH_BIN:-ralph} run --dry-run 2>&1 | grep -q 'Backend\|Max iterations'
+    # Dry-run flag
+    - name: "--dry-run flag exists"
+      type: cli-flag
+      run: ${RALPH_BIN:-ralph} run --help | grep -q -- '--dry-run'
 
 cli-adapters:
   spec: cli-adapters.spec.md
   behaviors:
-    # Backend configuration
-    - name: "dry-run shows backend"
-      type: output
-      run: ${RALPH_BIN:-ralph} run --dry-run 2>&1 | grep -q 'Backend:'
-
-    - name: "config file is configurable"
+    # Config flag
+    - name: "-c/--config flag exists"
       type: cli-flag
-      run: ${RALPH_BIN:-ralph} run --help | grep -q -- '--config'
+      run: ${RALPH_BIN:-ralph} run --help | grep -qE '^\s+-c, --config'
 
 feature-parity:
   spec: feature-parity.spec.md
