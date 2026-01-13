@@ -59,3 +59,5 @@ site/
 
 .worktrees
 PROMPT.md
+# But allow benchmark task prompts
+!bench/tasks/**/PROMPT.md
