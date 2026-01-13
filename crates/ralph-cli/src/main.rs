@@ -11,7 +11,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use ralph_adapters::{detect_backend, CliBackend, CliExecutor, PtyConfig, PtyExecutor};
-use ralph_core::{EventHistory, EventLogger, EventLoop, EventParser, EventRecord, RalphConfig, TerminationReason};
+use ralph_core::{EventHistory, EventLogger, EventLoop, EventParser, EventRecord, RalphConfig, SummaryWriter, TerminationReason};
 use ralph_proto::{Event, HatId};
 use std::io::{stdout, IsTerminal};
 use std::path::PathBuf;
@@ -93,6 +93,9 @@ enum Commands {
     /// Run the orchestration loop (default if no subcommand given)
     Run(RunArgs),
 
+    /// Resume a previously interrupted loop from existing scratchpad
+    Resume(ResumeArgs),
+
     /// View event history for debugging
     Events(EventsArgs),
 }
@@ -142,6 +145,29 @@ struct RunArgs {
     no_pty: bool,
 }
 
+/// Arguments for the resume subcommand.
+///
+/// Per spec: "When loop terminates due to safeguard (not completion promise),
+/// user can run `ralph resume` to restart reading existing scratchpad."
+#[derive(Parser, Debug)]
+struct ResumeArgs {
+    /// Override max iterations (from current position)
+    #[arg(long)]
+    max_iterations: Option<u32>,
+
+    /// Enable PTY mode
+    #[arg(long)]
+    pty: bool,
+
+    /// PTY observation mode
+    #[arg(long)]
+    observe: bool,
+
+    /// Disable PTY mode
+    #[arg(long)]
+    no_pty: bool,
+}
+
 /// Arguments for the events subcommand.
 #[derive(Parser, Debug)]
 struct EventsArgs {
@@ -182,6 +208,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Some(Commands::Run(args)) => run_command(cli.config, cli.verbose, cli.color, args).await,
+        Some(Commands::Resume(args)) => resume_command(cli.config, cli.verbose, cli.color, args).await,
         Some(Commands::Events(args)) => events_command(cli.color, args),
         None => {
             // Default to run with no overrides (backwards compatibility)
@@ -312,6 +339,98 @@ async fn run_command(
     let exit_code = reason.exit_code();
 
     // Use explicit exit for non-zero codes to ensure proper exit status
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
+
+    Ok(())
+}
+
+/// Resume a previously interrupted loop from existing scratchpad.
+///
+/// Per spec: "When loop terminates due to safeguard (not completion promise),
+/// user can run `ralph resume` to restart reading existing scratchpad,
+/// continuing from where it left off."
+async fn resume_command(
+    config_path: PathBuf,
+    verbose: bool,
+    color_mode: ColorMode,
+    args: ResumeArgs,
+) -> Result<()> {
+    info!("Ralph Orchestrator v{} - Resuming", env!("CARGO_PKG_VERSION"));
+
+    // Load configuration
+    let mut config = if config_path.exists() {
+        RalphConfig::from_file(&config_path)
+            .with_context(|| format!("Failed to load config from {:?}", config_path))?
+    } else {
+        warn!("Config file {:?} not found, using defaults", config_path);
+        RalphConfig::default()
+    };
+
+    config.normalize();
+
+    // Check that scratchpad exists (required for resume)
+    let scratchpad_path = std::path::Path::new(&config.core.scratchpad);
+    if !scratchpad_path.exists() {
+        anyhow::bail!(
+            "Cannot resume: scratchpad not found at '{}'. Use `ralph run` to start a new loop.",
+            config.core.scratchpad
+        );
+    }
+
+    info!("Found existing scratchpad at '{}'", config.core.scratchpad);
+
+    // Apply CLI overrides
+    if let Some(max_iter) = args.max_iterations {
+        config.event_loop.max_iterations = max_iter;
+    }
+    if verbose {
+        config.verbose = true;
+    }
+
+    // Apply PTY mode overrides
+    if args.no_pty {
+        config.cli.pty_mode = false;
+    } else if args.observe {
+        config.cli.pty_mode = true;
+        config.cli.pty_interactive = false;
+    } else if args.pty {
+        config.cli.pty_mode = true;
+        config.cli.pty_interactive = true;
+    }
+
+    // Validate configuration
+    let warnings = config.validate().context("Configuration validation failed")?;
+    for warning in &warnings {
+        eprintln!("{warning}");
+    }
+
+    // Handle auto-detection if backend is "auto"
+    if config.cli.backend == "auto" {
+        let priority = config.get_agent_priority();
+        let detected = detect_backend(&priority, |backend| {
+            config.adapter_settings(backend).enabled
+        });
+
+        match detected {
+            Ok(backend) => {
+                info!("Auto-detected backend: {}", backend);
+                config.cli.backend = backend;
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                return Err(anyhow::Error::new(e));
+            }
+        }
+    }
+
+    // Run the orchestration loop in resume mode
+    // The key difference: we publish task.resume instead of task.start,
+    // signaling the planner to read the existing scratchpad
+    let reason = run_loop_impl(config, color_mode, true).await?;
+    let exit_code = reason.exit_code();
+
     if exit_code != 0 {
         std::process::exit(exit_code);
     }
@@ -483,6 +602,17 @@ fn truncate(s: &str, max_len: usize) -> String {
 }
 
 async fn run_loop(config: RalphConfig, color_mode: ColorMode) -> Result<TerminationReason> {
+    run_loop_impl(config, color_mode, false).await
+}
+
+/// Core loop implementation supporting both fresh start and resume modes.
+///
+/// `resume`: If true, publishes `task.resume` instead of `task.start`,
+/// signaling the planner to read existing scratchpad rather than doing fresh gap analysis.
+async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool) -> Result<TerminationReason> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
     let use_colors = color_mode.should_use_colors();
 
     // Determine effective PTY mode (with fallback logic)
@@ -497,20 +627,45 @@ async fn run_loop(config: RalphConfig, color_mode: ColorMode) -> Result<Terminat
         false
     };
 
+    // Set up signal handling for graceful shutdown
+    // Per spec: SIGINT/SIGTERM should allow current iteration to finish, then exit with code 130
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let interrupted_clone = Arc::clone(&interrupted);
+
+    // Spawn a task to listen for Ctrl+C (SIGINT)
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            warn!("Interrupt received (SIGINT), finishing current iteration...");
+            interrupted_clone.store(true, Ordering::SeqCst);
+        }
+    });
+
     // Read prompt file
     let prompt_content = std::fs::read_to_string(&config.event_loop.prompt_file)
         .with_context(|| format!("Failed to read prompt file: {}", config.event_loop.prompt_file))?;
 
     // Initialize event loop
     let mut event_loop = EventLoop::new(config.clone());
-    event_loop.initialize(&prompt_content);
+
+    // For resume mode, we initialize with a different event topic
+    // This tells the planner to read existing scratchpad rather than creating a new one
+    if resume {
+        event_loop.initialize_resume(&prompt_content);
+    } else {
+        event_loop.initialize(&prompt_content);
+    }
 
     // Initialize event logger for debugging
     let mut event_logger = EventLogger::default_path();
 
-    // Log initial task.start event
-    let start_event = Event::new("task.start", &prompt_content);
-    let start_record = EventRecord::new(0, "loop", &start_event, Some(&HatId::new("planner")));
+    // Log initial event (task.start or task.resume)
+    let (start_topic, start_triggered) = if resume {
+        ("task.resume", "planner")
+    } else {
+        ("task.start", "planner")
+    };
+    let start_event = Event::new(start_topic, &prompt_content);
+    let start_record = EventRecord::new(0, "loop", &start_event, Some(&HatId::new(start_triggered)));
     if let Err(e) = event_logger.log(&start_record) {
         warn!("Failed to log start event: {}", e);
     }
@@ -529,11 +684,39 @@ async fn run_loop(config: RalphConfig, color_mode: ColorMode) -> Result<Terminat
     // Track the last hat to detect hat changes for logging
     let mut last_hat: Option<HatId> = None;
 
+    // Helper closure to handle termination (writes summary, prints status, creates final checkpoint)
+    let handle_termination = |reason: &TerminationReason, state: &ralph_core::LoopState, git_checkpoint: bool, scratchpad: &str| {
+        // Per spec: Write summary file on termination
+        let summary_writer = SummaryWriter::default();
+        let scratchpad_path = std::path::Path::new(scratchpad);
+        let scratchpad_opt = if scratchpad_path.exists() { Some(scratchpad_path) } else { None };
+
+        // Get final commit SHA if available
+        let final_commit = get_last_commit_info();
+
+        if let Err(e) = summary_writer.write(reason, state, scratchpad_opt, final_commit.as_deref()) {
+            warn!("Failed to write summary file: {}", e);
+        }
+
+        // Per spec: Create final checkpoint if pending changes exist
+        if git_checkpoint {
+            if let Ok(true) = create_final_checkpoint() {
+                debug!("Final checkpoint created on termination");
+            }
+        }
+
+        // Print termination info to console
+        print_termination(reason, state, use_colors);
+    };
+
     // Main orchestration loop
     loop {
         // Check termination before execution
         if let Some(reason) = event_loop.check_termination() {
-            print_termination(&reason, event_loop.state(), use_colors);
+            // Per spec: Publish loop.terminate event to observers
+            let terminate_event = event_loop.publish_terminate_event(&reason);
+            log_terminate_event(&mut event_logger, event_loop.state().iteration, &terminate_event);
+            handle_termination(&reason, event_loop.state(), config.git_checkpoint, &config.core.scratchpad);
             return Ok(reason);
         }
 
@@ -544,7 +727,10 @@ async fn run_loop(config: RalphConfig, color_mode: ColorMode) -> Result<Terminat
                 warn!("No hats with pending events, terminating");
                 // No pending events is treated as stopped (not a success)
                 let reason = TerminationReason::Stopped;
-                print_termination(&reason, event_loop.state(), use_colors);
+                // Per spec: Publish loop.terminate event to observers
+                let terminate_event = event_loop.publish_terminate_event(&reason);
+                log_terminate_event(&mut event_logger, event_loop.state().iteration, &terminate_event);
+                handle_termination(&reason, event_loop.state(), config.git_checkpoint, &config.core.scratchpad);
                 return Ok(reason);
             }
         };
@@ -585,7 +771,14 @@ async fn run_loop(config: RalphConfig, color_mode: ColorMode) -> Result<Terminat
 
         // Process output
         if let Some(reason) = event_loop.process_output(&hat_id, &output, success) {
-            print_termination(&reason, event_loop.state(), use_colors);
+            // Per spec: Log "All done! {promise} detected." when completion promise found
+            if reason == TerminationReason::CompletionPromise {
+                info!("All done! {} detected.", config.event_loop.completion_promise);
+            }
+            // Per spec: Publish loop.terminate event to observers
+            let terminate_event = event_loop.publish_terminate_event(&reason);
+            log_terminate_event(&mut event_logger, event_loop.state().iteration, &terminate_event);
+            handle_termination(&reason, event_loop.state(), config.git_checkpoint, &config.core.scratchpad);
             return Ok(reason);
         }
 
@@ -594,6 +787,16 @@ async fn run_loop(config: RalphConfig, color_mode: ColorMode) -> Result<Terminat
             if create_checkpoint(event_loop.state().iteration)? {
                 event_loop.record_checkpoint();
             }
+        }
+
+        // Per spec: Check for interrupt after each iteration completes
+        // "SIGINT received during iteration → current iteration allowed to finish, then exit"
+        if interrupted.load(Ordering::SeqCst) {
+            let reason = TerminationReason::Interrupted;
+            let terminate_event = event_loop.publish_terminate_event(&reason);
+            log_terminate_event(&mut event_logger, event_loop.state().iteration, &terminate_event);
+            handle_termination(&reason, event_loop.state(), config.git_checkpoint, &config.core.scratchpad);
+            return Ok(reason);
         }
     }
 }
@@ -667,6 +870,19 @@ fn log_events_from_output(
         if let Err(e) = logger.log(&record) {
             warn!("Failed to log event {}: {}", event.topic, e);
         }
+    }
+}
+
+/// Logs the loop.terminate system event to the event history.
+///
+/// Per spec: loop.terminate is an observer-only event published on loop exit.
+fn log_terminate_event(logger: &mut EventLogger, iteration: u32, event: &Event) {
+    // loop.terminate is published by the orchestrator, not a hat
+    // No hat can trigger on it (it's observer-only)
+    let record = EventRecord::new(iteration, "loop", event, None::<&HatId>);
+
+    if let Err(e) = logger.log(&record) {
+        warn!("Failed to log loop.terminate event: {}", e);
     }
 }
 
@@ -752,4 +968,66 @@ fn create_checkpoint(iteration: u32) -> Result<bool> {
     }
 
     Ok(true)
+}
+
+/// Creates a final git checkpoint on loop termination if there are pending changes.
+///
+/// Per spec: "Given loop terminates with pending changes, When termination flow executes,
+/// Then final git checkpoint is created before exit."
+fn create_final_checkpoint() -> Result<bool> {
+    // Check if there are pending changes
+    let output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .context("Failed to run git status")?;
+
+    let has_changes = !output.stdout.is_empty();
+
+    if !has_changes {
+        debug!("No pending changes for final checkpoint");
+        return Ok(false);
+    }
+
+    info!("Creating final checkpoint on termination");
+
+    let status = Command::new("git")
+        .args(["add", "-A"])
+        .status()
+        .context("Failed to run git add")?;
+
+    if !status.success() {
+        warn!("git add failed for final checkpoint");
+        return Ok(false);
+    }
+
+    let status = Command::new("git")
+        .args(["commit", "-m", "ralph: final checkpoint on termination"])
+        .status()
+        .context("Failed to run git commit")?;
+
+    if !status.success() {
+        warn!("git commit failed for final checkpoint");
+        return Ok(false);
+    }
+
+    Ok(true)
+}
+
+/// Gets the last commit info (short SHA and subject) for the summary file.
+fn get_last_commit_info() -> Option<String> {
+    let output = Command::new("git")
+        .args(["log", "-1", "--format=%h: %s"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let info = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if info.is_empty() {
+            None
+        } else {
+            Some(info)
+        }
+    } else {
+        None
+    }
 }

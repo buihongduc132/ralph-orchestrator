@@ -1,25 +1,10 @@
-# ABOUTME: Ralph Orchestrator package for AI agent orchestration
-# ABOUTME: Implements the Ralph Wiggum technique with multi-tool support
+"""
+Ralph Orchestrator - DEPRECATED
 
-"""Ralph Orchestrator - Simple AI agent orchestration."""
+This package has been retired. Please migrate to the Rust-based version:
+    brew install mikeyobrien/homebrew-tap/ralph
 
-__version__ = "1.2.3"
+Or: cargo install ralph-orchestrator
+"""
 
-from .orchestrator import RalphOrchestrator
-from .metrics import Metrics, CostTracker, IterationStats
-from .error_formatter import ClaudeErrorFormatter, ErrorMessage
-from .verbose_logger import VerboseLogger
-from .output import DiffStats, DiffFormatter, RalphConsole
-
-__all__ = [
-    "RalphOrchestrator",
-    "Metrics",
-    "CostTracker",
-    "IterationStats",
-    "ClaudeErrorFormatter",
-    "ErrorMessage",
-    "VerboseLogger",
-    "DiffStats",
-    "DiffFormatter",
-    "RalphConsole",
-]
+__version__ = "1.4.0"

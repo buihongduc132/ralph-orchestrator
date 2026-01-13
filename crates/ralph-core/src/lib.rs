@@ -19,6 +19,7 @@ mod hat_registry;
 mod instructions;
 mod session_player;
 mod session_recorder;
+mod summary_writer;
 pub mod task_definition;
 pub mod workspace;
 
@@ -31,5 +32,6 @@ pub use hat_registry::HatRegistry;
 pub use instructions::InstructionBuilder;
 pub use session_player::{PlayerConfig, ReplayMode, SessionPlayer, TimestampedRecord};
 pub use session_recorder::{Record, SessionRecorder};
+pub use summary_writer::SummaryWriter;
 pub use task_definition::{TaskDefinition, TaskDefinitionError, TaskSetup, TaskSuite, Verification};
 pub use workspace::{CleanupPolicy, TaskWorkspace, VerificationResult, WorkspaceError, WorkspaceInfo, WorkspaceManager};

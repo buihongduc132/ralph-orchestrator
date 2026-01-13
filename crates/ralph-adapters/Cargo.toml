@@ -19,3 +19,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+
+# PTY support
+portable-pty.workspace = true
+nix.workspace = true
+crossterm.workspace = true
+vt100.workspace = true

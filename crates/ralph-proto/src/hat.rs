@@ -84,7 +84,7 @@ impl Hat {
 
     /// Creates the default planner hat.
     ///
-    /// Per spec: Planner triggers on `task.start`, `build.done`, `build.blocked`
+    /// Per spec: Planner triggers on `task.start`, `task.resume`, `build.done`, `build.blocked`
     /// and publishes `build.task`.
     pub fn default_planner() -> Self {
         Self {
@@ -92,6 +92,7 @@ impl Hat {
             name: "Planner".to_string(),
             subscriptions: vec![
                 Topic::new("task.start"),
+                Topic::new("task.resume"),
                 Topic::new("build.done"),
                 Topic::new("build.blocked"),
             ],
@@ -163,6 +164,7 @@ mod tests {
         let hat = Hat::default_planner();
         assert_eq!(hat.id.as_str(), "planner");
         assert!(hat.is_subscribed(&Topic::new("task.start")));
+        assert!(hat.is_subscribed(&Topic::new("task.resume"))); // For ralph resume
         assert!(hat.is_subscribed(&Topic::new("build.done")));
         assert!(hat.is_subscribed(&Topic::new("build.blocked")));
         assert!(!hat.is_subscribed(&Topic::new("build.task")));

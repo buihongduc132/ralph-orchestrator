@@ -176,6 +176,7 @@ mod tests {
             backend: "claude".to_string(),
             command: None,
             prompt_mode: "arg".to_string(),
+            ..Default::default()
         };
         let backend = CliBackend::from_config(&config);
 

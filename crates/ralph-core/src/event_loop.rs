@@ -47,6 +47,22 @@ impl TerminationReason {
             TerminationReason::Interrupted => 130,
         }
     }
+
+    /// Returns the reason string for use in loop.terminate event payload.
+    ///
+    /// Per spec event payload format:
+    /// `completed | max_iterations | max_runtime | consecutive_failures | interrupted | error`
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TerminationReason::CompletionPromise => "completed",
+            TerminationReason::MaxIterations => "max_iterations",
+            TerminationReason::MaxRuntime => "max_runtime",
+            TerminationReason::MaxCost => "max_cost",
+            TerminationReason::ConsecutiveFailures => "consecutive_failures",
+            TerminationReason::Stopped => "stopped",
+            TerminationReason::Interrupted => "interrupted",
+        }
+    }
 }
 
 /// Current state of the event loop.
@@ -165,20 +181,35 @@ impl EventLoop {
 
     /// Initializes the loop by publishing the start event.
     pub fn initialize(&mut self, prompt_content: &str) {
+        self.initialize_with_topic("task.start", prompt_content);
+    }
+
+    /// Initializes the loop for resume mode by publishing task.resume.
+    ///
+    /// Per spec: "User can run `ralph resume` to restart reading existing scratchpad."
+    /// The planner should read the existing scratchpad rather than doing fresh gap analysis.
+    pub fn initialize_resume(&mut self, prompt_content: &str) {
+        self.initialize_with_topic("task.resume", prompt_content);
+    }
+
+    /// Common initialization logic with configurable topic.
+    fn initialize_with_topic(&mut self, topic: &str, prompt_content: &str) {
         // Per spec: Log hat list, not "mode" terminology
         // ✅ "Ralph ready with hats: planner, builder"
         // ❌ "Starting in multi-hat mode"
         let hat_names: Vec<_> = self.registry.all().map(|h| h.id.as_str()).collect();
+        let action = if topic == "task.resume" { "Resuming" } else { "Let's do this" };
         info!(
             hats = ?hat_names,
             max_iterations = %self.config.event_loop.max_iterations,
-            "I'm Ralph. Got my hats ready: {}. Let's do this.",
-            hat_names.join(", ")
+            "I'm Ralph. Got my hats ready: {}. {}.",
+            hat_names.join(", "),
+            action
         );
 
-        let start_event = Event::new("task.start", prompt_content);
+        let start_event = Event::new(topic, prompt_content);
         self.bus.publish(start_event);
-        debug!(topic = "task.start", "Published start event");
+        debug!(topic = topic, "Published {} event", topic);
     }
 
     /// Gets the next hat to execute (if any have pending events).
@@ -300,6 +331,72 @@ impl EventLoop {
             iteration = self.state.iteration,
             "Checkpoint recorded"
         );
+    }
+
+    /// Publishes the loop.terminate system event to observers.
+    ///
+    /// Per spec: "Published by the orchestrator (not agents) when the loop exits."
+    /// This is an observer-only event—hats cannot trigger on it.
+    ///
+    /// Returns the event for logging purposes.
+    pub fn publish_terminate_event(&mut self, reason: &TerminationReason) -> Event {
+        let elapsed = self.state.elapsed();
+        let duration_str = format_duration(elapsed);
+
+        let payload = format!(
+            "## Reason\n{}\n\n## Status\n{}\n\n## Summary\n- Iterations: {}\n- Duration: {}\n- Exit code: {}",
+            reason.as_str(),
+            termination_status_text(reason),
+            self.state.iteration,
+            duration_str,
+            reason.exit_code()
+        );
+
+        let event = Event::new("loop.terminate", &payload);
+
+        // Publish to bus for observers (but no hat can trigger on this)
+        self.bus.publish(event.clone());
+
+        info!(
+            reason = %reason.as_str(),
+            iterations = self.state.iteration,
+            duration = %duration_str,
+            "Wrapping up: {}. {} iterations in {}.",
+            reason.as_str(),
+            self.state.iteration,
+            duration_str
+        );
+
+        event
+    }
+}
+
+/// Formats a duration as human-readable string.
+fn format_duration(d: Duration) -> String {
+    let total_secs = d.as_secs();
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+
+    if hours > 0 {
+        format!("{}h {}m {}s", hours, minutes, seconds)
+    } else if minutes > 0 {
+        format!("{}m {}s", minutes, seconds)
+    } else {
+        format!("{}s", seconds)
+    }
+}
+
+/// Returns a human-readable status based on termination reason.
+fn termination_status_text(reason: &TerminationReason) -> &'static str {
+    match reason {
+        TerminationReason::CompletionPromise => "All tasks completed successfully.",
+        TerminationReason::MaxIterations => "Stopped at iteration limit.",
+        TerminationReason::MaxRuntime => "Stopped at runtime limit.",
+        TerminationReason::MaxCost => "Stopped at cost limit.",
+        TerminationReason::ConsecutiveFailures => "Too many consecutive failures.",
+        TerminationReason::Stopped => "Manually stopped.",
+        TerminationReason::Interrupted => "Interrupted by signal.",
     }
 }
 
