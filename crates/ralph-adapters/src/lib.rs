@@ -27,10 +27,13 @@ mod auto_detect;
 mod cli_backend;
 mod cli_executor;
 mod pty_executor;
+mod pty_handle;
 
 pub use auto_detect::{detect_backend, detect_backend_default, is_backend_available, NoBackendError, DEFAULT_PRIORITY};
 pub use cli_backend::{CliBackend, CustomBackendError, PromptMode};
 pub use cli_executor::{CliExecutor, ExecutionResult};
 pub use pty_executor::{
-    CtrlCAction, CtrlCState, PtyConfig, PtyExecutionResult, PtyExecutor, TerminationType,
+    CtrlCAction, CtrlCState, InputSource, OutputHandler, PtyConfig, PtyExecutionResult,
+    PtyExecutor, TerminationType,
 };
+pub use pty_handle::{ControlCommand, PtyHandle};

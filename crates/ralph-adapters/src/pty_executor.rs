@@ -694,6 +694,18 @@ enum OutputEvent {
     Error(String),
 }
 
+/// Trait for handling PTY output.
+pub trait OutputHandler {
+    /// Handle output data from the PTY.
+    fn handle_output(&mut self, data: Vec<u8>);
+}
+
+/// Trait for providing input to the PTY.
+pub trait InputSource {
+    /// Poll for input data. Returns None if no input is available.
+    fn poll_input(&mut self) -> Option<Vec<u8>>;
+}
+
 /// Strips ANSI escape sequences from raw bytes.
 ///
 /// Uses `strip-ansi-escapes` for direct byte-level ANSI removal without terminal

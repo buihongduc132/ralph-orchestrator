@@ -30,3 +30,12 @@ Claude: Now I'll make the changes...
 
 ## Q3: How should verbose mode be enabled?
 
+**Answer:** Introduce verbosity flag if it doesn't exist. Use idiomatic precedence:
+1. CLI flag (`--verbose` / `-v`) — highest priority
+2. Environment variable (`RALPH_VERBOSE`)
+3. Config file (`verbose: true`) — lowest priority
+
+---
+
+## Q4: How should errors and failures be displayed?
+
