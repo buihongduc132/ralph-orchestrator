@@ -58,6 +58,17 @@ impl CliExecutor {
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
 
+        // Set working directory to current directory (mirrors PTY executor behavior)
+        let cwd = std::env::current_dir()?;
+        command.current_dir(&cwd);
+
+        debug!(
+            command = %cmd,
+            args = ?args,
+            cwd = ?cwd,
+            "Spawning CLI command"
+        );
+
         if stdin_input.is_some() {
             command.stdin(Stdio::piped());
         }
