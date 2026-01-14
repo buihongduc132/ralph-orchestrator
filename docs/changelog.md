@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-01-14
+
+### Added
+
+- **Hatless Ralph Architecture**: Ralph is now a constant coordinator with optional hats
+  - Solo mode: Ralph handles all events (no hats configured)
+  - Multi-hat mode: Ralph orchestrates multiple specialized hats
+  - Per-hat backend configuration (each hat can use different AI agent)
+  - Default publishes: Hats can specify fallback events
+- **JSONL Event Format**: Events written to `.agent/events.jsonl` instead of XML in output
+  - Structured event format: `{"topic":"...", "payload":"...", "ts":"..."}`
+  - EventReader for reading new events since last read
+  - Backward compatible with existing event topics
+- **Interactive TUI Mode**: Full-screen terminal UI for agent interaction
+  - Embedded terminal widget with PTY integration
+  - Prefix commands (Ctrl+a): quit, help, pause, skip, abort
+  - Scroll mode with navigation (j/k/arrows/Page Up/Down/g/G)
+  - Search in scroll mode (/ and ? for forward/backward, n/N for next/prev)
+  - Iteration boundary handling (screen clears between iterations)
+  - Configurable prefix key in ralph.yml
+- **Mock Backend Testing**: Deterministic E2E testing with scripted responses
+  - MockBackend for testing without real AI agents
+  - Scenario YAML format for test cases
+  - 5 scenario tests covering solo mode, multi-hat, orphaned events, default_publishes, mixed backends
+
+### Changed
+
+- **BREAKING**: No default hats - empty config = solo Ralph mode
+- **BREAKING**: Planner hat removed from all presets
+- **BREAKING**: Events must be written to `.agent/events.jsonl` (XML format deprecated)
+- **BREAKING**: HatRegistry no longer creates default planner/builder hats
+- CLI flag `-i/--interactive` now launches TUI mode (was non-interactive mode)
+- CLI flag `--tui` deprecated (use `-i` instead)
+- HatConfig now includes `backend` and `default_publishes` fields
+- InstructionBuilder adds `build_hatless_ralph()` for new prompt format
+- EventLoop uses EventReader instead of EventParser
+
+### Removed
+
+- **BREAKING**: XML event format no longer supported
+- **BREAKING**: Automatic planner/builder hat creation
+
+### Migration
+
+See [Migration Guide](docs/migration/v2-hatless-ralph.md) for upgrading from v1.x.
+
 ## [1.2.3] - 2026-01-12
 
 ### Changed

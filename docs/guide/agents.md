@@ -665,6 +665,49 @@ python ralph_orchestrator.py \
   --verbose
 ```
 
+## Event Format (v2.0+)
+
+Ralph v2.0 uses JSONL (JSON Lines) for event communication between agents and the orchestrator.
+
+### Writing Events
+
+Agents write events to `.agent/events.jsonl`:
+
+```json
+{"topic":"build.done","payload":"tests: pass","ts":"2026-01-14T19:30:00Z"}
+{"topic":"build.blocked","payload":"Missing dependency","ts":"2026-01-14T19:31:15Z"}
+```
+
+**Event structure:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `topic` | string | Yes | Event topic (e.g., "build.done") |
+| `payload` | string | No | Optional event data |
+| `ts` | string | Yes | ISO 8601 timestamp |
+
+### Example: Builder Hat
+
+```bash
+# Agent writes to .agent/events.jsonl
+echo '{"topic":"build.done","payload":"All tests passing","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' >> .agent/events.jsonl
+```
+
+### Reading Events
+
+Ralph reads new events from `.agent/events.jsonl` after each agent execution. Events trigger hat transitions based on configured triggers.
+
+### Legacy XML Format (v1.x)
+
+**Deprecated**: v1.x used XML events in agent output:
+```xml
+<event topic="build.done">
+tests: pass
+</event>
+```
+
+This format is no longer supported in v2.0. See [Migration Guide](../migration/v2-hatless-ralph.md).
+
 ## Best Practices
 
 ### 1. Match Agent to Task
@@ -711,3 +754,4 @@ Balance quality with budget:
 - Learn about [Cost Management](cost-management.md)
 - Understand [Checkpointing](checkpointing.md) strategies
 - Explore [Configuration](configuration.md) options
+- Read the [v2.0 Migration Guide](../migration/v2-hatless-ralph.md)

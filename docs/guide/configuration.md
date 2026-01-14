@@ -425,9 +425,85 @@ For a complete list of all configuration options, run:
 python ralph_orchestrator.py --help
 ```
 
+## Hat Configuration (v2.0+)
+
+Ralph v2.0 introduces "Hatless Ralph" - a constant coordinator with optional, configurable hats.
+
+### Hat Backends
+
+Each hat can specify its own backend:
+
+```yaml
+cli:
+  backend: claude  # Default backend for Ralph
+
+hats:
+  - name: builder
+    backend: gemini  # This hat uses Gemini
+    triggers: ["build.task"]
+    publishes: ["build.done"]
+    
+  - name: reviewer
+    backend:
+      type: kiro
+      agent: codex  # Kiro with custom agent
+    triggers: ["review.request"]
+    publishes: ["review.done"]
+```
+
+**Backend types:**
+
+| Type | Format | Example |
+|------|--------|---------|
+| Named | String | `backend: claude` |
+| Kiro Agent | Object | `backend: {type: kiro, agent: codex}` |
+| Custom | Object | `backend: {command: ./my-agent, args: [--flag]}` |
+
+### Default Publishes
+
+Hats can specify a fallback event if they forget to write one:
+
+```yaml
+hats:
+  - name: builder
+    triggers: ["build.task"]
+    default_publishes: "build.done"
+```
+
+If the builder completes without writing events to `.agent/events.jsonl`, Ralph automatically injects `build.done`.
+
+### Solo Mode vs Multi-Hat Mode
+
+**Solo mode** (no hats):
+```yaml
+cli:
+  backend: claude
+# No hats section - Ralph handles everything
+```
+
+**Multi-hat mode**:
+```yaml
+cli:
+  backend: claude
+
+hats:
+  - name: builder
+    triggers: ["build.task"]
+    publishes: ["build.done"]
+    backend: claude
+    
+  - name: tester
+    triggers: ["test.request"]
+    publishes: ["test.pass", "test.fail"]
+    backend: gemini
+```
+
+See [Migration Guide](../migration/v2-hatless-ralph.md) for upgrading from v1.x.
+
 ## Next Steps
 
 - Learn about [AI Agents](agents.md) and their capabilities
 - Understand [Prompt Engineering](prompts.md) for better results
 - Explore [Cost Management](cost-management.md) strategies
 - Set up [Checkpointing](checkpointing.md) for recovery
+- Read the [v2.0 Migration Guide](../migration/v2-hatless-ralph.md)
