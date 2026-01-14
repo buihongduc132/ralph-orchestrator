@@ -1,5 +1,5 @@
 ---
-status: approved
+status: review
 gap_analysis: 2026-01-14
 related:
   - cli-adapters.spec.md
@@ -472,6 +472,10 @@ event_loop:
   max_runtime_seconds: 14400
   max_consecutive_failures: 5
 
+  # Stall recovery: retry → escalate → terminate
+  stall_retry_attempts: 2        # Retries before escalating (0 = escalate immediately)
+  recovery_hat: "planner"        # Hat to trigger on stall (must subscribe to task.resume)
+
 cli:
   backend: "claude"
 
@@ -629,7 +633,133 @@ When a hat has no explicit `instructions`, the orchestrator derives them from:
 1. **Triggers** → Look up `events.<topic>.on_trigger` for each trigger
 2. **Publishes** → Look up `events.<topic>.on_publish` for each publish
 3. **Built-in defaults** → Fall back for well-known events (`task.start`, `build.task`, etc.)
-4. **Must-publish rule** → Always appended: "Every iteration MUST publish one of your allowed events"
+
+### Must-Publish Rule (Always Injected)
+
+**Critical:** The must-publish rule is injected for **all custom hats** with publishes, regardless of whether instructions are explicit or derived. This ensures agents always know their contractual obligation.
+
+When a custom hat has `publishes` defined:
+```
+**You MUST publish one of these events based on your task results:** `event1`, `event2`
+Failure to publish will terminate the loop.
+```
+
+This rule is injected into the `## EVENTS` section of the prompt, after listing the publish topics. The rationale:
+- Explicit instructions might describe *what* to do but forget to mandate event emission
+- The orchestrator relies on events to route between hats—no event = dead end
+- Making the requirement explicit prevents subtle bugs where agents complete work but forget to signal
+
+### Recovery When Agent Fails to Publish (Retry → Escalate → Terminate)
+
+When an agent completes an iteration without publishing any event, the orchestrator uses a three-stage recovery mechanism aligned with the Ralph Tenets:
+
+```
+Hat completes without publishing event
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ STAGE 1: BACKPRESSURE RETRY (Tenet 2)                       │
+│                                                              │
+│ Same hat gets 1-2 retry attempts with explicit feedback:    │
+│ "⚠️ OUTPUT REJECTED: No event published.                    │
+│  You MUST publish one of: `review.approved`, `review.changes_requested`│
+│  Re-read the scratchpad and publish an appropriate event."  │
+│                                                              │
+│ Handles: Agent "forgot" to publish (common with LLMs)       │
+└─────────────────────────────────────────────────────────────┘
+    │
+    │ Still no event after retries?
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ STAGE 2: ESCALATE TO PLANNER (Tenet 3)                      │
+│                                                              │
+│ Treat as implicit build.blocked and trigger recovery hat:   │
+│ "⚠️ HAT STALLED: 'reviewer' failed to publish after 2 retries.│
+│  Assess the situation and decide: retry, simplify, or cancel."│
+│                                                              │
+│ Planner receives HAT TOPOLOGY (see below) to make informed  │
+│ decisions about alternative paths forward.                   │
+│                                                              │
+│ Handles: Hat is stuck, needs replanning (Tenet 3)           │
+└─────────────────────────────────────────────────────────────┘
+    │
+    │ No recovery hat configured OR escalation also fails?
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ STAGE 3: TERMINATE                                          │
+│                                                              │
+│ Clear error with actionable information:                    │
+│ "Loop terminated: Hat 'reviewer' stalled, no recovery path. │
+│  Consider: adding task.resume trigger to a recovery hat,    │
+│  or checking hat configuration."                            │
+│                                                              │
+│ Exit code: 1 (failure)                                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Hat Topology Injection for Recovery
+
+When escalating to the planner for recovery, the orchestrator injects **hat topology information** so the planner can make informed decisions:
+
+```
+## Available Hats
+
+| Hat | Triggers | Publishes |
+|-----|----------|-----------|
+| planner | task.start, task.resume, build.done, build.blocked | build.task, review.request |
+| builder | build.task | build.done, build.blocked |
+| reviewer | review.request | review.approved, review.changes_requested |
+
+## Stalled Hat
+- **Hat:** reviewer
+- **Expected publishes:** review.approved, review.changes_requested
+- **Retry attempts:** 2
+- **Last output:** (summary of what reviewer did)
+
+## Recovery Options
+1. Dispatch different work via `build.task` (triggers: builder)
+2. Cancel the review task and proceed
+3. Mark task as blocked with explanation
+```
+
+This enables the planner to:
+- See what alternative paths exist in the workflow
+- Understand which events trigger which hats
+- Make intelligent decisions rather than blindly retrying
+
+### Tenet Alignment
+
+| Stage | Tenet | Rationale |
+|-------|-------|-----------|
+| Retry | **Tenet 2: Backpressure** | Reject bad output, don't prescribe fix |
+| Retry | **Tenet 1: Fresh Context** | Same hat, fresh context often self-corrects |
+| Escalate | **Tenet 3: Plan Is Disposable** | Replanning is cheap vs. spiraling |
+| Escalate | **Tenet 5: Steer With Signals** | Topology info guides, doesn't prescribe |
+| Escalate | **Tenet 6: Let Ralph Ralph** | Planner decides recovery, not orchestrator |
+| Terminate | **Tenet 2: Backpressure** | Clear failure better than infinite loop |
+
+### Configuration
+
+```yaml
+event_loop:
+  # Retry attempts before escalating to recovery hat
+  stall_retry_attempts: 2
+
+  # Recovery hat to trigger when a hat stalls (must subscribe to task.resume)
+  # Default: "planner" (if it exists and subscribes to task.resume)
+  recovery_hat: "planner"
+```
+
+### Why Not Just Inject `task.resume`?
+
+The previous approach (`inject_fallback_event`) had issues:
+
+| Problem | Old Approach | New Approach |
+|---------|--------------|--------------|
+| Custom hat misconfigured | ❌ No planner = stuck | ✅ Retry first, clear error if no recovery |
+| Agent "forgot" once | ⚠️ Switches to planner (overkill) | ✅ Retry same hat (minimal disruption) |
+| Hat stuck in loop | ⚠️ Planner might re-dispatch same work | ✅ Planner sees topology, can choose alternatives |
+| No `task.resume` subscriber | ❌ Silent failure | ✅ Clear error message |
 
 ### Well-Known Events (Built-in Defaults)
 
@@ -903,6 +1033,64 @@ The orchestrator owns all spawned CLI processes and must ensure no orphaned proc
 - **Given** hat with triggers and publishes but no instructions
 - **When** prompt is built
 - **Then** derived behaviors are included with "MUST publish" rule appended
+
+- **Given** custom hat with explicit instructions AND publishes defined
+- **When** prompt is built
+- **Then** "MUST publish" rule is injected (regardless of explicit instructions)
+
+- **Given** custom hat with publishes but hat has no publishes defined (empty list)
+- **When** prompt is built
+- **Then** no "MUST publish" rule is injected
+
+### Stall Recovery (Retry → Escalate → Terminate)
+
+#### Stage 1: Backpressure Retry
+
+- **Given** agent iteration completes without publishing any event
+- **When** stall_retry_attempts > 0
+- **Then** same hat is retried with backpressure feedback listing expected publishes
+
+- **Given** hat is retried after failing to publish
+- **When** retry prompt is built
+- **Then** prompt includes "OUTPUT REJECTED: No event published" and lists expected events
+
+- **Given** hat publishes event on retry attempt
+- **When** event is valid
+- **Then** retry counter resets and loop continues normally
+
+#### Stage 2: Escalate to Planner
+
+- **Given** hat fails to publish after stall_retry_attempts retries
+- **When** recovery_hat exists and subscribes to `task.resume`
+- **Then** recovery hat is triggered with stall context and hat topology
+
+- **Given** recovery hat is triggered for stall recovery
+- **When** prompt is built
+- **Then** prompt includes: stalled hat name, expected publishes, retry count, and full hat topology table
+
+- **Given** planner receives stall escalation
+- **When** planner reads hat topology
+- **Then** planner can see all available hats, their triggers, and their publishes
+
+#### Stage 3: Terminate
+
+- **Given** hat fails to publish after retries
+- **When** no recovery_hat configured or recovery_hat doesn't subscribe to `task.resume`
+- **Then** loop terminates with clear error explaining the stall and suggesting fixes
+
+- **Given** recovery hat also fails to make progress
+- **When** consecutive_failures limit is reached
+- **Then** loop terminates normally via existing safeguard
+
+#### Hat Topology
+
+- **Given** any hat configuration (default or custom)
+- **When** stall escalation occurs
+- **Then** planner prompt includes table of all hats with their triggers and publishes
+
+- **Given** planner receives hat topology during recovery
+- **When** deciding recovery action
+- **Then** planner can dispatch events to any hat listed in topology
 
 ### Safeguards
 
@@ -1196,6 +1384,7 @@ The orchestrator must detect when to exit the loop and report the outcome. Termi
 | **Max iterations** | `iteration >= max_iterations` | 2 (limit) |
 | **Max runtime** | `elapsed >= max_runtime_seconds` | 2 (limit) |
 | **Consecutive failures** | `consecutive_failures >= max_consecutive_failures` | 1 (failure) |
+| **Hat stalled** | Hat fails to publish after retries AND no recovery path available | 1 (failure) |
 | **User interrupt** | SIGINT/SIGTERM received | 130 (interrupt) |
 | **Unrecoverable error** | CLI crash, config error, system failure | 1 (failure) |
 

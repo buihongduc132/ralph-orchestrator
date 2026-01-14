@@ -1,6 +1,6 @@
 ---
 status: draft
-gap_analysis: null
+gap_analysis: 2026-01-14
 related:
   - test-tools.spec.md
   - event-loop.spec.md

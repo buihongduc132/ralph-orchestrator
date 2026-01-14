@@ -285,16 +285,19 @@ Can't finish? Publish `<event topic="build.blocked">` with:
             hat.instructions.clone()
         };
 
-        let publish_topics = if hat.publishes.is_empty() {
-            String::new()
+        let (publish_topics, must_publish) = if hat.publishes.is_empty() {
+            (String::new(), String::new())
         } else {
-            format!(
-                "You publish to: {}",
-                hat.publishes
-                    .iter()
-                    .map(|t| t.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+            let topics: Vec<&str> = hat.publishes.iter().map(|t| t.as_str()).collect();
+            let topics_list = topics.join(", ");
+            let topics_backticked = format!("`{}`", topics.join("`, `"));
+
+            (
+                format!("You publish to: {}", topics_list),
+                format!(
+                    "\n\n**You MUST publish one of these events based on your task results:** {}\nFailure to publish will terminate the loop.",
+                    topics_backticked
+                ),
             )
         };
 
@@ -314,7 +317,7 @@ Can't finish? Publish `<event topic="build.blocked">` with:
 ## EVENTS
 
 Communicate via: `<event topic="...">message</event>`
-{publish_topics}
+{publish_topics}{must_publish}
 
 ## COMPLETION
 
@@ -327,6 +330,7 @@ INCOMING:
             core_behaviors = core_behaviors,
             role_instructions = role_instructions,
             publish_topics = publish_topics,
+            must_publish = must_publish,
             promise = self.completion_promise,
             events = events_context,
         )
@@ -512,5 +516,44 @@ mod tests {
         assert!(coordinator.contains("Custom rule two"));
         assert!(ralph.contains("Custom rule one"));
         assert!(ralph.contains("Custom rule two"));
+    }
+
+    #[test]
+    fn test_must_publish_injected_for_explicit_instructions() {
+        use ralph_proto::Topic;
+
+        let builder = default_builder("DONE");
+        let hat = Hat::new("reviewer", "Code Reviewer")
+            .with_instructions("Review PRs for quality and correctness.")
+            .with_publishes(vec![
+                Topic::new("review.approved"),
+                Topic::new("review.changes_requested"),
+            ]);
+
+        let instructions = builder.build_custom_hat(&hat, "PR #123 ready");
+
+        // Must-publish rule should be injected even with explicit instructions
+        assert!(
+            instructions.contains("You MUST publish one of these events"),
+            "Must-publish rule should be injected for custom hats with publishes"
+        );
+        assert!(instructions.contains("`review.approved`"));
+        assert!(instructions.contains("`review.changes_requested`"));
+        assert!(instructions.contains("Failure to publish will terminate the loop"));
+    }
+
+    #[test]
+    fn test_must_publish_not_injected_when_no_publishes() {
+        let builder = default_builder("DONE");
+        let hat = Hat::new("observer", "Silent Observer")
+            .with_instructions("Observe and log, but do not emit events.");
+
+        let instructions = builder.build_custom_hat(&hat, "Observe this");
+
+        // No must-publish rule when hat has no publishes
+        assert!(
+            !instructions.contains("You MUST publish"),
+            "Must-publish rule should NOT be injected when hat has no publishes"
+        );
     }
 }

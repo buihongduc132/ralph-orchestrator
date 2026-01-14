@@ -16,6 +16,7 @@
 | 🟢 P2 | terminal_events configuration field missing | hat-collections.spec.md | PLANNED |
 | 🟢 P2 | Test tools not agent-callable | test-tools.spec.md | ~30% |
 | 🟢 P2 | Benchmark export formats not implemented | benchmark-ux.spec.md | PLANNED |
+| 🟡 P1 | Behavioral verification catalog not implemented (0/78) | behavioral-verification.spec.md | PLANNED |
 | 🔵 P3 | 6 specs missing frontmatter | Various | DOCS |
 
 ### Resolved Since 2026-01-13
@@ -107,6 +108,26 @@ The following P0 issues from the previous analysis have been **fixed**:
 - **Acceptance criterion:** "Snapshot testing with insta integration"
 - **Status:** Not implemented - no snapshot comparison infrastructure
 
+### behavioral-verification.spec.md — Progressive Verification Pipeline
+
+- **Acceptance criteria:** 6-level progressive verification (Level 0-6)
+- **Status:** ~15% implemented - infrastructure only
+- **What exists:**
+  - SessionRecorder/SessionPlayer ✓
+  - ralph-bench with run/replay commands ✓
+  - specs/behaviors.yaml with ~30 CLI checks ✓
+- **What's missing:**
+  - Level 3-4 verification scripts (`level3-smoke.sh`, `level4-verify.sh`)
+  - 78-behavior catalog (Event Routing, Planner, Builder, Safeguards, etc.)
+  - Cassettes directory for VCR recordings
+  - Mock backend (`--backend mock`, `--mock-responses`)
+  - Verifier hat configuration
+  - `ralph-test` binary
+  - Two-phase verification (execute + Ralph-as-Verifier)
+  - LLM-as-judge integration
+  - JUnit/JSON report generation
+- **Location:** Spec describes system spanning multiple crates
+
 ### test-tools.spec.md — Agent-Callable Test Tools
 
 - **Acceptance criteria:** 9 test tools callable by agents
@@ -172,7 +193,7 @@ The following specs lack standard YAML frontmatter (status, gap_analysis, relate
 | scaffolding.spec.md | implemented | **100%** | All acceptance criteria pass ✅ |
 | terminal-ui.spec.md | implemented | **98%** | Custom hat emoji/registry minor |
 | hat-collections.spec.md | draft | **60%** | 5 validations done, 5 missing |
-| behavioral-verification.spec.md | draft | N/A | Not analyzed (draft) |
+| behavioral-verification.spec.md | draft | **15%** | Infrastructure only, catalog not built |
 | test-tools.spec.md | review | **30%** | Infrastructure exists, tools not callable |
 | feature-parity.spec.md | N/A | N/A | Missing frontmatter |
 | v1-v2-feature-parity.spec.md | N/A | **100%** | Checklist complete ✅ |

@@ -132,6 +132,13 @@ impl Hat {
         self
     }
 
+    /// Sets the topics this hat publishes.
+    #[must_use]
+    pub fn with_publishes(mut self, publishes: Vec<Topic>) -> Self {
+        self.publishes = publishes;
+        self
+    }
+
     /// Checks if this hat is subscribed to the given topic.
     pub fn is_subscribed(&self, topic: &Topic) -> bool {
         self.subscriptions.iter().any(|sub| sub.matches(topic))
