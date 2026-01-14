@@ -335,7 +335,68 @@ INCOMING:
             events = events_context,
         )
     }
+
+    /// Builds Hatless Ralph instructions (coordinator without hats).
+    ///
+    /// Ralph is the constant coordinator that handles events when no hat claims them.
+    /// In solo mode (no hats), Ralph does everything. In multi-hat mode, Ralph coordinates.
+    pub fn build_hatless_ralph(&self, hat_topology: Option<&[(String, Vec<String>, Vec<String>)]>) -> String {
+        let core_behaviors = self.build_core_behaviors();
+        
+        let mode_section = if let Some(topology) = hat_topology {
+            self.build_multi_hat_section(topology)
+        } else {
+            SOLO_MODE_SECTION.to_string()
+        };
+
+        format!(
+            r#"You are Ralph. You're the coordinator.
+
+{core_behaviors}
+{mode_section}
+## EVENT WRITING
+
+Write events to `.agent/events.jsonl` as JSONL:
+{{"topic": "build.task", "payload": "...", "ts": "2026-01-14T12:00:00Z"}}
+
+## DONE
+
+Output {promise} when all tasks complete.
+"#,
+            core_behaviors = core_behaviors,
+            mode_section = mode_section,
+            promise = self.completion_promise,
+        )
+    }
+
+    fn build_multi_hat_section(&self, topology: &[(String, Vec<String>, Vec<String>)]) -> String {
+        let mut section = String::from("## MULTI-HAT MODE\n\nYou coordinate a team. Delegate to hats or handle yourself.\n\n### MY TEAM\n\n");
+        
+        section.push_str("| Hat | Subscribes To | Publishes |\n");
+        section.push_str("|-----|---------------|----------|\n");
+        
+        for (name, subscribes, publishes) in topology {
+            let subscribes_str = subscribes.join(", ");
+            let publishes_str = publishes.join(", ");
+            section.push_str(&format!("| {} | {} | {} |\n", name, subscribes_str, publishes_str));
+        }
+        
+        section.push_str("\n**Your role:** Catch orphaned events, coordinate work, ensure completion.\n\n");
+        section
+    }
 }
+
+const SOLO_MODE_SECTION: &str = r"## SOLO MODE
+
+You're doing everything yourself. Plan, implement, validate.
+
+1. **Gap analysis.** Compare specs against codebase.
+2. **Own the scratchpad.** Create/update with prioritized tasks.
+3. **Implement.** Pick ONE task, write code, validate.
+4. **Commit.** Mark `[x]` in scratchpad.
+5. **Repeat** until all tasks done.
+
+";
 
 #[cfg(test)]
 mod tests {
@@ -555,5 +616,93 @@ mod tests {
             !instructions.contains("You MUST publish"),
             "Must-publish rule should NOT be injected when hat has no publishes"
         );
+    }
+
+    #[test]
+    fn test_hatless_ralph_solo_mode() {
+        let builder = default_builder("LOOP_COMPLETE");
+        let prompt = builder.build_hatless_ralph(None);
+
+        // Identity
+        assert!(prompt.contains("You are Ralph. You're the coordinator."));
+
+        // Core behaviors
+        assert!(prompt.contains("## CORE BEHAVIORS"));
+        assert!(prompt.contains("**Scratchpad:**"));
+        assert!(prompt.contains("**Specs:**"));
+        assert!(prompt.contains("### Guardrails"));
+
+        // Solo mode section
+        assert!(prompt.contains("## SOLO MODE"));
+        assert!(prompt.contains("You're doing everything yourself"));
+        assert!(prompt.contains("Gap analysis"));
+        assert!(prompt.contains("Own the scratchpad"));
+        assert!(prompt.contains("Implement"));
+        assert!(prompt.contains("Commit"));
+        assert!(prompt.contains("Repeat"));
+
+        // Event writing
+        assert!(prompt.contains("## EVENT WRITING"));
+        assert!(prompt.contains(".agent/events.jsonl"));
+        assert!(prompt.contains("JSONL"));
+
+        // Completion
+        assert!(prompt.contains("## DONE"));
+        assert!(prompt.contains("LOOP_COMPLETE"));
+
+        // Should NOT have multi-hat section
+        assert!(!prompt.contains("## MULTI-HAT MODE"));
+    }
+
+    #[test]
+    fn test_hatless_ralph_multi_hat_mode() {
+        let builder = default_builder("LOOP_COMPLETE");
+        let topology = vec![
+            (
+                "Planner".to_string(),
+                vec!["task.start".to_string(), "build.done".to_string()],
+                vec!["build.task".to_string()],
+            ),
+            (
+                "Builder".to_string(),
+                vec!["build.task".to_string()],
+                vec!["build.done".to_string(), "build.blocked".to_string()],
+            ),
+        ];
+        let prompt = builder.build_hatless_ralph(Some(&topology));
+
+        // Identity
+        assert!(prompt.contains("You are Ralph. You're the coordinator."));
+
+        // Core behaviors
+        assert!(prompt.contains("## CORE BEHAVIORS"));
+
+        // Multi-hat mode section
+        assert!(prompt.contains("## MULTI-HAT MODE"));
+        assert!(prompt.contains("You coordinate a team"));
+        assert!(prompt.contains("### MY TEAM"));
+        assert!(prompt.contains("| Hat | Subscribes To | Publishes |"));
+        assert!(prompt.contains("| Planner | task.start, build.done | build.task |"));
+        assert!(prompt.contains("| Builder | build.task | build.done, build.blocked |"));
+        assert!(prompt.contains("Catch orphaned events"));
+
+        // Event writing
+        assert!(prompt.contains("## EVENT WRITING"));
+
+        // Completion
+        assert!(prompt.contains("LOOP_COMPLETE"));
+
+        // Should NOT have solo mode section
+        assert!(!prompt.contains("## SOLO MODE"));
+    }
+
+    #[test]
+    fn test_hatless_ralph_includes_event_writing_instructions() {
+        let builder = default_builder("DONE");
+        let prompt = builder.build_hatless_ralph(None);
+
+        // JSONL format instructions
+        assert!(prompt.contains("Write events to `.agent/events.jsonl`"));
+        assert!(prompt.contains(r#"{"topic": "build.task", "payload": "...", "ts": "2026-01-14T12:00:00Z"}"#));
     }
 }
