@@ -726,15 +726,31 @@ event_loop:
 
     #[test]
     fn test_completion_promise_detection() {
+        use std::fs;
+        use std::path::Path;
+
         let config = RalphConfig::default();
         let mut event_loop = EventLoop::new(config);
         event_loop.initialize("Test");
 
+        // Create scratchpad with all tasks completed
+        let scratchpad_path = Path::new(".agent/scratchpad.md");
+        fs::create_dir_all(scratchpad_path.parent().unwrap()).unwrap();
+        fs::write(scratchpad_path, "## Tasks\n- [x] Task 1 done\n- [x] Task 2 done\n").unwrap();
+
         // Use planner hat since it's the one that outputs completion promise per spec
         let hat_id = HatId::new("planner");
+        
+        // First LOOP_COMPLETE - should NOT terminate (needs consecutive confirmation)
         let reason = event_loop.process_output(&hat_id, "Done! LOOP_COMPLETE", true);
+        assert_eq!(reason, None, "First confirmation should not terminate");
+        
+        // Second consecutive LOOP_COMPLETE - should terminate
+        let reason = event_loop.process_output(&hat_id, "Done! LOOP_COMPLETE", true);
+        assert_eq!(reason, Some(TerminationReason::CompletionPromise), "Second consecutive confirmation should terminate");
 
-        assert_eq!(reason, Some(TerminationReason::CompletionPromise));
+        // Cleanup
+        fs::remove_file(scratchpad_path).ok();
     }
 
     #[test]
@@ -1109,6 +1125,9 @@ hats:
 
     #[test]
     fn test_partial_completion_with_cancelled_tasks() {
+        use std::fs;
+        use std::path::Path;
+
         // Test that cancelled tasks don't block completion when all other tasks are done
         let config = RalphConfig::default();
         let mut event_loop = EventLoop::new(config);
@@ -1116,20 +1135,30 @@ hats:
 
         let planner_id = HatId::new("planner");
         
-        // Simulate completion with some cancelled tasks
-        let output = r#"
-## Tasks
+        // Create scratchpad with completed and cancelled tasks
+        let scratchpad_path = Path::new(".agent/scratchpad.md");
+        fs::create_dir_all(scratchpad_path.parent().unwrap()).unwrap();
+        let scratchpad_content = r#"## Tasks
 - [x] Core feature implemented
 - [x] Tests added
 - [~] Documentation update (cancelled: out of scope)
 - [~] Performance optimization (cancelled: not needed)
-
-LOOP_COMPLETE
 "#;
+        fs::write(scratchpad_path, scratchpad_content).unwrap();
         
-        // Should complete successfully despite cancelled tasks
+        // Simulate completion with some cancelled tasks
+        let output = "All done! LOOP_COMPLETE";
+        
+        // First confirmation - should not terminate yet
+        let reason = event_loop.process_output(&planner_id, output, true);
+        assert_eq!(reason, None, "First confirmation should not terminate");
+        
+        // Second consecutive confirmation - should complete successfully despite cancelled tasks
         let reason = event_loop.process_output(&planner_id, output, true);
         assert_eq!(reason, Some(TerminationReason::CompletionPromise), "Should complete with partial completion");
+
+        // Cleanup
+        fs::remove_file(scratchpad_path).ok();
     }
 
     #[test]

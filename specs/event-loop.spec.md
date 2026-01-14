@@ -1,5 +1,5 @@
 ---
-status: review
+status: approved
 gap_analysis: 2026-01-13
 related:
   - cli-adapters.spec.md
