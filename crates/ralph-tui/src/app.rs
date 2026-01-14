@@ -1,6 +1,7 @@
 //! Main application loop for the TUI.
 
 use crate::input::{Command, InputRouter, RouteResult};
+use crate::scroll::ScrollManager;
 use crate::state::TuiState;
 use crate::widgets::{footer, header, help, terminal::TerminalWidget};
 use anyhow::Result;
@@ -25,6 +26,7 @@ pub struct App {
     state: Arc<Mutex<TuiState>>,
     terminal_widget: Arc<Mutex<TerminalWidget>>,
     input_router: InputRouter,
+    scroll_manager: ScrollManager,
     input_tx: mpsc::UnboundedSender<Vec<u8>>,
     control_tx: mpsc::UnboundedSender<ralph_adapters::pty_handle::ControlCommand>,
 }
@@ -54,6 +56,7 @@ impl App {
             state,
             terminal_widget,
             input_router: InputRouter::new(),
+            scroll_manager: ScrollManager::new(),
             input_tx,
             control_tx,
         }
@@ -133,8 +136,24 @@ impl App {
                                             Command::Abort => {
                                                 let _ = self.control_tx.send(ralph_adapters::pty_handle::ControlCommand::Abort);
                                             }
+                                            Command::EnterScroll => {
+                                                self.input_router.enter_scroll_mode();
+                                                self.state.lock().unwrap().in_scroll_mode = true;
+                                                // Update scroll dimensions
+                                                let widget = self.terminal_widget.lock().unwrap();
+                                                let total_lines = widget.total_lines();
+                                                drop(widget);
+                                                self.scroll_manager.update_dimensions(total_lines, terminal.size()?.height as usize - 6);
+                                            }
                                             Command::Unknown => {}
                                         }
+                                    }
+                                    RouteResult::ScrollKey(key) => {
+                                        self.scroll_manager.handle_key(key);
+                                    }
+                                    RouteResult::ExitScroll => {
+                                        self.scroll_manager.reset();
+                                        self.state.lock().unwrap().in_scroll_mode = false;
                                     }
                                     RouteResult::Consumed => {
                                         // Prefix consumed, wait for command

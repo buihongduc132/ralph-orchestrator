@@ -7,6 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub enum InputMode {
     Normal,
     AwaitingCommand,
+    Scroll,
 }
 
 /// Prefix commands.
@@ -17,6 +18,7 @@ pub enum Command {
     Pause,
     Skip,
     Abort,
+    EnterScroll,
     Unknown,
 }
 
@@ -25,6 +27,8 @@ pub enum Command {
 pub enum RouteResult {
     Forward(KeyEvent),
     Command(Command),
+    ScrollKey(KeyEvent),
+    ExitScroll,
     Consumed,
 }
 
@@ -60,14 +64,30 @@ impl InputRouter {
                         'p' => Command::Pause,
                         'n' => Command::Skip,
                         'a' => Command::Abort,
+                        '[' => Command::EnterScroll,
                         _ => Command::Unknown,
                     })
                 } else {
                     RouteResult::Consumed
                 }
             }
+            InputMode::Scroll => {
+                // Exit scroll mode on q, Escape, or Enter
+                if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter) {
+                    self.mode = InputMode::Normal;
+                    RouteResult::ExitScroll
+                } else {
+                    RouteResult::ScrollKey(key)
+                }
+            }
         }
     }
+
+    /// Enters scroll mode.
+    pub fn enter_scroll_mode(&mut self) {
+        self.mode = InputMode::Scroll;
+    }
+
 }
 
 impl Default for InputRouter {
@@ -189,5 +209,54 @@ mod tests {
 
         let cmd = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
         assert_eq!(router.route_key(cmd), RouteResult::Command(Command::Abort));
+    }
+
+    #[test]
+    fn enter_scroll_command_returns_bracket() {
+        let mut router = InputRouter::new();
+        let prefix = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        router.route_key(prefix);
+
+        let cmd = KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE);
+        assert_eq!(
+            router.route_key(cmd),
+            RouteResult::Command(Command::EnterScroll)
+        );
+    }
+
+    #[test]
+    fn scroll_mode_routes_navigation_keys() {
+        let mut router = InputRouter::new();
+        router.enter_scroll_mode();
+
+        let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        assert_eq!(router.route_key(key), RouteResult::ScrollKey(key));
+    }
+
+    #[test]
+    fn scroll_mode_exits_on_q() {
+        let mut router = InputRouter::new();
+        router.enter_scroll_mode();
+
+        let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        assert_eq!(router.route_key(key), RouteResult::ExitScroll);
+    }
+
+    #[test]
+    fn scroll_mode_exits_on_escape() {
+        let mut router = InputRouter::new();
+        router.enter_scroll_mode();
+
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(router.route_key(key), RouteResult::ExitScroll);
+    }
+
+    #[test]
+    fn scroll_mode_exits_on_enter() {
+        let mut router = InputRouter::new();
+        router.enter_scroll_mode();
+
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(router.route_key(key), RouteResult::ExitScroll);
     }
 }

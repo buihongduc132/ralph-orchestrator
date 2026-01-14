@@ -17,12 +17,19 @@ pub fn render(state: &TuiState) -> Paragraph<'static> {
         LoopMode::Paused => Span::styled("⏸ paused", Style::default().fg(Color::Yellow)),
     };
 
+    let scroll_indicator = if state.in_scroll_mode {
+        Span::styled(" [SCROLL]", Style::default().fg(Color::Cyan))
+    } else {
+        Span::raw("")
+    };
+
     let line = Line::from(vec![
         Span::raw("🎩 RALPH ORCHESTRATOR"),
         Span::raw("          "),
         status,
         Span::raw("  "),
         mode,
+        scroll_indicator,
     ]);
 
     Paragraph::new(line).block(Block::default().borders(Borders::ALL))

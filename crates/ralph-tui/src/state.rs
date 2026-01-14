@@ -28,6 +28,8 @@ pub struct TuiState {
     pub show_help: bool,
     /// Loop execution mode.
     pub loop_mode: LoopMode,
+    /// Whether in scroll mode.
+    pub in_scroll_mode: bool,
 }
 
 impl TuiState {
@@ -42,6 +44,7 @@ impl TuiState {
             last_event_at: None,
             show_help: false,
             loop_mode: LoopMode::Auto,
+            in_scroll_mode: false,
         }
     }
 

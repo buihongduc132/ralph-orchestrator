@@ -9,6 +9,7 @@
 
 mod app;
 pub mod input;
+pub mod scroll;
 mod state;
 pub mod widgets;
 

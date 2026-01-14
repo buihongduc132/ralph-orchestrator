@@ -240,5 +240,47 @@ If no hat fits: do it myself.
 
 ---
 
-## Q8: How do presets change under this model?
+## Q8: How can we make event publishing more resilient?
+
+**Answer:**
+
+Instead of parsing XML event tags from agent response text, use **disk state**:
+
+**Current (brittle):**
+```
+Agent output text → Regex parse for <event topic="..."> → Hope it's there
+```
+
+**Proposed (resilient):**
+```
+Agent writes to .agent/events.jsonl → Orchestrator reads file → Route event
+```
+
+**Why this is better:**
+- **Tenet 4 (Disk Is State):** We already use disk for scratchpad — events are the same pattern
+- **Structured data:** JSONL is unambiguous; no regex parsing of free-form text
+- **Observable:** Event file is a debug artifact — you can `cat` it to see what happened
+- **Backpressure:** If file isn't written or malformed, we catch it cleanly
+
+**Event file format:**
+```jsonl
+{"topic": "build.done", "payload": "Implemented auth endpoint", "ts": "2024-01-15T10:24:12Z"}
+```
+
+**Routing flow:**
+```
+Hat completes iteration
+    │
+    ├─► Read .agent/events.jsonl (new entries since last read)
+    │       │
+    │       ├─► Event(s) found → Route to subscriber (or Ralph if none)
+    │       │
+    │       └─► No new events → Falls through to Ralph
+```
+
+**Bonus:** This unifies event publishing with event history — same file, same format, single source of truth.
+
+---
+
+## Q9: How do presets change under this model?
 
