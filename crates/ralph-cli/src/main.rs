@@ -322,6 +322,20 @@ async fn run_command(
         eprintln!("{warning}");
     }
 
+    // Run preflight validation to catch issues before the loop starts
+    let (preflight_errors, preflight_warnings) = config.preflight_check();
+    for warning in &preflight_warnings {
+        warn!("Preflight: {}", warning);
+    }
+    if !preflight_errors.is_empty() {
+        eprintln!("\n❌ Preflight check failed:");
+        for error in &preflight_errors {
+            eprintln!("   • {error}");
+        }
+        eprintln!("\nFix these issues before running the loop.\n");
+        anyhow::bail!("Preflight validation failed with {} error(s)", preflight_errors.len());
+    }
+
     // Handle auto-detection if backend is "auto"
     if config.cli.backend == "auto" {
         let priority = config.get_agent_priority();
@@ -443,6 +457,20 @@ async fn resume_command(
     let warnings = config.validate().context("Configuration validation failed")?;
     for warning in &warnings {
         eprintln!("{warning}");
+    }
+
+    // Run preflight validation to catch issues before the loop starts
+    let (preflight_errors, preflight_warnings) = config.preflight_check();
+    for warning in &preflight_warnings {
+        warn!("Preflight: {}", warning);
+    }
+    if !preflight_errors.is_empty() {
+        eprintln!("\n❌ Preflight check failed:");
+        for error in &preflight_errors {
+            eprintln!("   • {error}");
+        }
+        eprintln!("\nFix these issues before running the loop.\n");
+        anyhow::bail!("Preflight validation failed with {} error(s)", preflight_errors.len());
     }
 
     // Handle auto-detection if backend is "auto"

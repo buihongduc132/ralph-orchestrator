@@ -33,6 +33,12 @@ pub struct RalphConfig {
     #[serde(default)]
     pub hats: HashMap<String, HatConfig>,
 
+    /// Event metadata definitions (optional).
+    /// Defines what each event topic means, enabling auto-derived instructions.
+    /// If a hat uses custom events, define them here for proper behavior injection.
+    #[serde(default)]
+    pub events: HashMap<String, EventMetadata>,
+
     // ─────────────────────────────────────────────────────────────────────────
     // V1 COMPATIBILITY FIELDS (flat format)
     // These map to nested v2 fields for backwards compatibility.
@@ -127,6 +133,7 @@ impl Default for RalphConfig {
             cli: CliConfig::default(),
             core: CoreConfig::default(),
             hats: HashMap::new(),
+            events: HashMap::new(),
             // V1 compatibility fields
             agent: None,
             agent_priority: vec![],
@@ -372,6 +379,182 @@ impl RalphConfig {
         &self.cli.backend
     }
 
+    /// Performs preflight validation to catch issues before the loop starts.
+    ///
+    /// This validates:
+    /// - Event flow graph integrity (no dead-end events)
+    /// - Path existence (scratchpad parent dir, specs dir)
+    /// - Git availability (if checkpointing enabled)
+    ///
+    /// Returns a list of errors (fatal) and warnings (informational).
+    pub fn preflight_check(&self) -> (Vec<PreflightError>, Vec<PreflightWarning>) {
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+
+        // Build effective hat configs (use defaults if none configured)
+        let effective_hats = self.get_effective_hats();
+
+        // Check 1: At least one hat must exist
+        if effective_hats.is_empty() {
+            errors.push(PreflightError::NoHatsConfigured);
+            return (errors, warnings);
+        }
+
+        // Build trigger and publish maps for event flow analysis
+        let mut all_triggers: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut all_publishes: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
+
+        for (hat_id, hat_config) in &effective_hats {
+            for trigger in &hat_config.triggers {
+                all_triggers.insert(trigger.as_str());
+            }
+            for publish in &hat_config.publishes {
+                all_publishes.entry(publish.as_str()).or_default().push(hat_id.as_str());
+            }
+            // Check for hats that never publish (warning, not error)
+            if hat_config.publishes.is_empty() {
+                warnings.push(PreflightWarning::HatNeverPublishes {
+                    hat: hat_id.clone(),
+                });
+            }
+        }
+
+        // Check 2: Initial events must have handlers
+        for initial_event in &["task.start", "task.resume"] {
+            if !all_triggers.contains(initial_event) {
+                // Check if any hat would handle these (skip if not relevant to this config)
+                let is_relevant = effective_hats.values().any(|h| {
+                    h.triggers.iter().any(|t| t == "task.start" || t == "task.resume")
+                });
+                if !is_relevant && *initial_event == "task.start" {
+                    errors.push(PreflightError::NoInitialHandler {
+                        event: initial_event.to_string(),
+                    });
+                }
+            }
+        }
+
+        // Check 3: Every published event must have a subscriber (except LOOP_COMPLETE)
+        for (event, publishers) in &all_publishes {
+            if *event == "LOOP_COMPLETE" || *event == self.event_loop.completion_promise.as_str() {
+                continue; // Terminal event, no subscriber needed
+            }
+            if !all_triggers.contains(event) {
+                for publisher in publishers {
+                    errors.push(PreflightError::UnhandledEvent {
+                        event: event.to_string(),
+                        publisher: publisher.to_string(),
+                    });
+                }
+            }
+        }
+
+        // Check 4: Git availability (if checkpointing enabled)
+        if self.git_checkpoint && self.event_loop.checkpoint_interval > 0 {
+            if !Self::is_git_available() {
+                errors.push(PreflightError::GitNotAvailable);
+            }
+        }
+
+        // Check 5: Path validation
+        // Scratchpad parent directory should exist (or be creatable)
+        let scratchpad_path = Path::new(&self.core.scratchpad);
+        if let Some(parent) = scratchpad_path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                errors.push(PreflightError::PathNotFound {
+                    path: parent.display().to_string(),
+                    purpose: "scratchpad parent directory".to_string(),
+                });
+            }
+        }
+
+        // Specs directory should exist if referenced
+        if !self.core.specs_dir.is_empty() {
+            let specs_path = Path::new(&self.core.specs_dir);
+            if !specs_path.exists() {
+                // Warning, not error - planner may create it
+                debug!("Specs directory '{}' does not exist yet", self.core.specs_dir);
+            }
+        }
+
+        // Check 6: Custom events should have metadata defined
+        // Well-known events have built-in defaults, custom events need metadata
+        let well_known_events: std::collections::HashSet<&str> = [
+            "task.start", "task.resume",
+            "build.task", "build.done", "build.blocked",
+            "review.request", "review.approved", "review.changes_requested",
+            "LOOP_COMPLETE",
+        ].into_iter().collect();
+
+        for (hat_id, hat_config) in &effective_hats {
+            // Skip if hat has explicit instructions
+            if !hat_config.instructions.is_empty() {
+                continue;
+            }
+
+            // Check triggers
+            for trigger in &hat_config.triggers {
+                if !well_known_events.contains(trigger.as_str())
+                    && !self.events.contains_key(trigger)
+                {
+                    warnings.push(PreflightWarning::UndefinedEventMetadata {
+                        event: trigger.clone(),
+                        hat: hat_id.clone(),
+                        usage: "trigger".to_string(),
+                    });
+                }
+            }
+
+            // Check publishes
+            for publish in &hat_config.publishes {
+                if !well_known_events.contains(publish.as_str())
+                    && !self.events.contains_key(publish)
+                    && publish != &self.event_loop.completion_promise
+                {
+                    warnings.push(PreflightWarning::UndefinedEventMetadata {
+                        event: publish.clone(),
+                        hat: hat_id.clone(),
+                        usage: "publish".to_string(),
+                    });
+                }
+            }
+        }
+
+        (errors, warnings)
+    }
+
+    /// Helper to check if git is available in PATH.
+    fn is_git_available() -> bool {
+        std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// Returns effective hat configurations, using defaults if none configured.
+    fn get_effective_hats(&self) -> HashMap<String, HatConfig> {
+        if self.hats.is_empty() {
+            // Return default planner + builder config
+            let mut defaults = HashMap::new();
+            defaults.insert("planner".to_string(), HatConfig {
+                name: "Planner".to_string(),
+                triggers: vec!["task.start".to_string(), "task.resume".to_string(), "build.done".to_string(), "build.blocked".to_string()],
+                publishes: vec!["build.task".to_string()],
+                instructions: String::new(),
+            });
+            defaults.insert("builder".to_string(), HatConfig {
+                name: "Builder".to_string(),
+                triggers: vec!["build.task".to_string()],
+                publishes: vec!["build.done".to_string(), "build.blocked".to_string()],
+                instructions: String::new(),
+            });
+            defaults
+        } else {
+            self.hats.clone()
+        }
+    }
+
     /// Returns the agent priority list for auto-detection.
     /// If empty, returns the default priority order.
     pub fn get_agent_priority(&self) -> Vec<&str> {
@@ -598,6 +781,37 @@ impl Default for CliConfig {
     }
 }
 
+/// Metadata for an event topic.
+///
+/// Defines what an event means, enabling auto-derived instructions for hats.
+/// When a hat triggers on or publishes an event, this metadata is used to
+/// generate appropriate behavior instructions.
+///
+/// Example:
+/// ```yaml
+/// events:
+///   deploy.start:
+///     description: "Deployment has been requested"
+///     on_trigger: "Prepare artifacts, validate config, check dependencies"
+///     on_publish: "Signal that deployment should begin"
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EventMetadata {
+    /// Brief description of what this event represents.
+    #[serde(default)]
+    pub description: String,
+
+    /// Instructions for a hat that triggers on (receives) this event.
+    /// Describes what the hat should do when it receives this event.
+    #[serde(default)]
+    pub on_trigger: String,
+
+    /// Instructions for a hat that publishes (emits) this event.
+    /// Describes when/how the hat should emit this event.
+    #[serde(default)]
+    pub on_publish: String,
+}
+
 /// Configuration for a single hat.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HatConfig {
@@ -651,6 +865,103 @@ pub enum ConfigError {
         field1: String,
         field2: String,
     },
+}
+
+/// Errors that occur during preflight validation.
+/// These are issues that would cause the loop to fail or terminate unexpectedly.
+#[derive(Debug, Clone)]
+pub enum PreflightError {
+    /// No hats are configured - the loop would have nothing to execute.
+    NoHatsConfigured,
+    /// A published event has no subscribers (dead end in event flow).
+    UnhandledEvent {
+        event: String,
+        publisher: String,
+    },
+    /// The initial event has no handler.
+    NoInitialHandler {
+        event: String,
+    },
+    /// Git is required for checkpointing but not available.
+    GitNotAvailable,
+    /// A required path doesn't exist.
+    PathNotFound {
+        path: String,
+        purpose: String,
+    },
+    /// A path exists but is not writable.
+    PathNotWritable {
+        path: String,
+        purpose: String,
+    },
+}
+
+impl std::fmt::Display for PreflightError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PreflightError::NoHatsConfigured => {
+                write!(f, "No hats configured. The event loop needs at least one hat to execute.")
+            }
+            PreflightError::UnhandledEvent { event, publisher } => {
+                write!(f, "Event '{event}' published by '{publisher}' has no subscriber. This would cause the loop to terminate unexpectedly.")
+            }
+            PreflightError::NoInitialHandler { event } => {
+                write!(f, "Initial event '{event}' has no handler. No hat is subscribed to receive it.")
+            }
+            PreflightError::GitNotAvailable => {
+                write!(f, "Git checkpointing is enabled but 'git' command not found in PATH.")
+            }
+            PreflightError::PathNotFound { path, purpose } => {
+                write!(f, "Required path not found: '{path}' ({purpose})")
+            }
+            PreflightError::PathNotWritable { path, purpose } => {
+                write!(f, "Path not writable: '{path}' ({purpose})")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PreflightError {}
+
+/// Warnings that occur during preflight validation.
+/// These are potential issues that may cause problems but aren't fatal.
+#[derive(Debug, Clone)]
+pub enum PreflightWarning {
+    /// A hat never publishes any events (may be intentional for terminal hats).
+    HatNeverPublishes {
+        hat: String,
+    },
+    /// An event is subscribed to but never published.
+    EventNeverPublished {
+        event: String,
+        subscriber: String,
+    },
+    /// A custom event has no metadata defined (may cause missing instructions).
+    UndefinedEventMetadata {
+        event: String,
+        hat: String,
+        usage: String, // "trigger" or "publish"
+    },
+}
+
+impl std::fmt::Display for PreflightWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PreflightWarning::HatNeverPublishes { hat } => {
+                write!(f, "Hat '{}' never publishes any events", hat)
+            }
+            PreflightWarning::EventNeverPublished { event, subscriber } => {
+                write!(f, "Event '{}' is subscribed to by '{}' but never published", event, subscriber)
+            }
+            PreflightWarning::UndefinedEventMetadata { event, hat, usage } => {
+                write!(
+                    f,
+                    "Custom event '{}' used as {} by '{}' has no metadata. Add to 'events:' config or provide explicit instructions.",
+                    event, usage, hat
+                )
+            }
+        }
+    }
 }
 
 #[cfg(test)]

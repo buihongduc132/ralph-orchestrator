@@ -6,8 +6,9 @@
 //!
 //! This maps directly to ghuntley's PROMPT_plan.md / PROMPT_build.md split.
 
-use crate::config::CoreConfig;
+use crate::config::{CoreConfig, EventMetadata};
 use ralph_proto::Hat;
+use std::collections::HashMap;
 
 /// Builds the prepended instructions for agent prompts.
 ///
@@ -20,6 +21,8 @@ use ralph_proto::Hat;
 pub struct InstructionBuilder {
     completion_promise: String,
     core: CoreConfig,
+    /// Event metadata for deriving instructions from pub/sub contracts.
+    events: HashMap<String, EventMetadata>,
 }
 
 impl InstructionBuilder {
@@ -31,6 +34,20 @@ impl InstructionBuilder {
         Self {
             completion_promise: completion_promise.into(),
             core,
+            events: HashMap::new(),
+        }
+    }
+
+    /// Creates a new instruction builder with event metadata for custom hats.
+    pub fn with_events(
+        completion_promise: impl Into<String>,
+        core: CoreConfig,
+        events: HashMap<String, EventMetadata>,
+    ) -> Self {
+        Self {
+            completion_promise: completion_promise.into(),
+            core,
+            events,
         }
     }
 
@@ -171,14 +188,99 @@ Can't finish? Publish `<event topic="build.blocked">` with:
         )
     }
 
+    /// Derives instructions from a hat's pub/sub contract and event metadata.
+    ///
+    /// For each event the hat triggers on or publishes:
+    /// 1. Check event metadata for on_trigger/on_publish instructions
+    /// 2. Fall back to built-in defaults for well-known events
+    ///
+    /// This allows users to define custom events with custom behaviors,
+    /// while still getting sensible defaults for standard events.
+    fn derive_instructions_from_contract(&self, hat: &Hat) -> String {
+        let mut behaviors: Vec<String> = Vec::new();
+
+        // Derive behaviors from triggers (what this hat responds to)
+        for trigger in &hat.subscriptions {
+            let trigger_str = trigger.as_str();
+
+            // First, check event metadata
+            if let Some(meta) = self.events.get(trigger_str) {
+                if !meta.on_trigger.is_empty() {
+                    behaviors.push(format!("**On `{}`:** {}", trigger_str, meta.on_trigger));
+                    continue;
+                }
+            }
+
+            // Fall back to built-in defaults for well-known events
+            let default_behavior = match trigger_str {
+                "task.start" | "task.resume" => Some("Analyze the task and create a plan in the scratchpad."),
+                "build.done" => Some("Review the completed work and decide next steps."),
+                "build.blocked" => Some("Analyze the blocker and decide how to unblock (simplify task, gather info, or escalate)."),
+                "build.task" => Some("Implement the assigned task. Follow existing patterns. Run backpressure (tests/checks). Commit when done."),
+                "review.request" => Some("Review the recent changes for correctness, tests, patterns, errors, and security."),
+                "review.approved" => Some("Mark the task complete `[x]` and proceed to next task."),
+                "review.changes_requested" => Some("Add fix tasks to scratchpad and dispatch."),
+                _ => None,
+            };
+
+            if let Some(behavior) = default_behavior {
+                behaviors.push(format!("**On `{}`:** {}", trigger_str, behavior));
+            }
+        }
+
+        // Derive behaviors from publishes (what this hat outputs)
+        for publish in &hat.publishes {
+            let publish_str = publish.as_str();
+
+            // First, check event metadata
+            if let Some(meta) = self.events.get(publish_str) {
+                if !meta.on_publish.is_empty() {
+                    behaviors.push(format!("**Publish `{}`:** {}", publish_str, meta.on_publish));
+                    continue;
+                }
+            }
+
+            // Fall back to built-in defaults for well-known events
+            let default_behavior = match publish_str {
+                "build.task" => Some("Dispatch ONE AT A TIME for pending `[ ]` tasks."),
+                "build.done" => Some("When implementation is finished and tests pass."),
+                "build.blocked" => Some("When stuck - include what you tried and why it failed."),
+                "review.request" => Some("After build completion, before marking done."),
+                "review.approved" => Some("If changes look good and meet requirements."),
+                "review.changes_requested" => Some("If issues found - include specific feedback."),
+                _ => None,
+            };
+
+            if let Some(behavior) = default_behavior {
+                behaviors.push(format!("**Publish `{}`:** {}", publish_str, behavior));
+            }
+        }
+
+        // Add must-publish rule if hat has publishable events
+        if !hat.publishes.is_empty() {
+            let topics: Vec<&str> = hat.publishes.iter().map(|t| t.as_str()).collect();
+            behaviors.push(format!(
+                "**IMPORTANT:** Every iteration MUST publish one of: `{}` or the loop will terminate.",
+                topics.join("`, `")
+            ));
+        }
+
+        if behaviors.is_empty() {
+            "Follow the incoming event instructions.".to_string()
+        } else {
+            format!("### Derived Behaviors\n\n{}", behaviors.join("\n\n"))
+        }
+    }
+
     /// Builds custom hat instructions for extended multi-agent configurations.
     ///
     /// Use this for teams beyond the default planner + builder hats.
+    /// When instructions are empty, derives them from the pub/sub contract.
     pub fn build_custom_hat(&self, hat: &Hat, events_context: &str) -> String {
         let core_behaviors = self.build_core_behaviors();
 
         let role_instructions = if hat.instructions.is_empty() {
-            "Follow the incoming event instructions.".to_string()
+            self.derive_instructions_from_contract(hat)
         } else {
             hat.instructions.clone()
         };

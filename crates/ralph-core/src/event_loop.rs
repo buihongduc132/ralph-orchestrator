@@ -141,9 +141,10 @@ impl EventLoop {
     /// Creates a new event loop from configuration.
     pub fn new(config: RalphConfig) -> Self {
         let registry = HatRegistry::from_config(&config);
-        let instruction_builder = InstructionBuilder::new(
+        let instruction_builder = InstructionBuilder::with_events(
             &config.event_loop.completion_promise,
             config.core.clone(),
+            config.events.clone(),
         );
 
         let mut bus = EventBus::new();
@@ -252,6 +253,24 @@ impl EventLoop {
     /// Gets the next hat to execute (if any have pending events).
     pub fn next_hat(&self) -> Option<&HatId> {
         self.bus.next_hat_with_pending()
+    }
+
+    /// Checks if any hats have pending events.
+    ///
+    /// Use this after `process_output` to detect if the LLM failed to publish an event.
+    /// If false after processing, the loop will terminate on the next iteration.
+    pub fn has_pending_events(&self) -> bool {
+        self.bus.next_hat_with_pending().is_some()
+    }
+
+    /// Gets the topics a hat is allowed to publish.
+    ///
+    /// Used to build retry prompts when the LLM forgets to publish an event.
+    pub fn get_hat_publishes(&self, hat_id: &HatId) -> Vec<String> {
+        self.registry
+            .get(hat_id)
+            .map(|hat| hat.publishes.iter().map(|t| t.to_string()).collect())
+            .unwrap_or_default()
     }
 
     /// Builds the prompt for a hat's execution.

@@ -1,6 +1,6 @@
 ---
 status: implemented
-gap_analysis: 2026-01-13
+gap_analysis: 2026-01-14
 related:
   - cli-adapters.spec.md
   - interactive-mode.spec.md
@@ -550,6 +550,124 @@ The orchestrator validates hat configurations:
 | Custom hats can't suppress core behaviors | Safety guardrail |
 | At least one hat can output completion promise | Ensure loop can terminate |
 
+## Preflight Validation
+
+Before the loop starts, the orchestrator runs preflight checks to catch configuration issues early. This prevents wasted iterations on broken configurations.
+
+### Preflight Errors (Fatal)
+
+| Error | Description |
+|-------|-------------|
+| `NoHatsConfigured` | No hats defined - loop has nothing to execute |
+| `UnhandledEvent` | A published event has no subscriber (dead end) |
+| `NoInitialHandler` | No hat triggers on `task.start` |
+| `GitNotAvailable` | Git checkpointing enabled but `git` not in PATH |
+| `PathNotFound` | Required path (scratchpad parent) doesn't exist |
+
+### Preflight Warnings (Informational)
+
+| Warning | Description |
+|---------|-------------|
+| `HatNeverPublishes` | A hat has no publish events (may be intentional) |
+| `UndefinedEventMetadata` | Custom event has no metadata defined |
+
+### Example Output
+
+```
+❌ Preflight check failed:
+   • Event 'deploy.start' published by 'deployer' has no subscriber.
+     This would cause the loop to terminate unexpectedly.
+
+Fix these issues before running the loop.
+```
+
+## Event Metadata
+
+Event metadata defines what each event topic means, enabling auto-derived instructions for custom hats. This allows users to define custom workflows without writing verbose instruction blocks.
+
+### Schema
+
+```yaml
+events:
+  <topic>:
+    description: "Brief description of what this event represents"
+    on_trigger: "What a hat should do when it receives this event"
+    on_publish: "When/how a hat should emit this event"
+```
+
+### Example
+
+```yaml
+events:
+  deploy.start:
+    description: "Deployment has been initiated"
+    on_trigger: "Execute deployment steps, monitor progress, handle failures"
+    on_publish: "Signal that deployment should begin after validation"
+
+  deploy.done:
+    description: "Deployment completed successfully"
+    on_trigger: "Verify deployment, run smoke tests, check health endpoints"
+    on_publish: "Signal successful deployment with evidence"
+
+  deploy.failed:
+    description: "Deployment failed"
+    on_trigger: "Analyze failure, decide on rollback or retry strategy"
+    on_publish: "Signal deployment failure with error details"
+
+hats:
+  deployer:
+    name: "Deployer"
+    triggers: ["deploy.start"]
+    publishes: ["deploy.done", "deploy.failed"]
+    # Instructions auto-derived from event metadata!
+```
+
+### How Auto-Derivation Works
+
+When a hat has no explicit `instructions`, the orchestrator derives them from:
+
+1. **Triggers** → Look up `events.<topic>.on_trigger` for each trigger
+2. **Publishes** → Look up `events.<topic>.on_publish` for each publish
+3. **Built-in defaults** → Fall back for well-known events (`task.start`, `build.task`, etc.)
+4. **Must-publish rule** → Always appended: "Every iteration MUST publish one of your allowed events"
+
+### Well-Known Events (Built-in Defaults)
+
+These events have built-in default behaviors and don't require metadata:
+
+| Event | Default Trigger Behavior | Default Publish Behavior |
+|-------|-------------------------|-------------------------|
+| `task.start` | Analyze task, create plan in scratchpad | — |
+| `task.resume` | Continue from existing scratchpad | — |
+| `build.task` | Implement task, run backpressure, commit | Dispatch ONE AT A TIME |
+| `build.done` | Review completed work, decide next steps | When tests pass |
+| `build.blocked` | Analyze blocker, decide how to unblock | When stuck |
+| `review.request` | Review for correctness, tests, patterns | After build completion |
+| `review.approved` | Mark task complete, proceed to next | If changes look good |
+| `review.changes_requested` | Add fix tasks, dispatch | If issues found |
+
+### Priority Order
+
+When building instructions:
+
+```
+1. Explicit instructions (if provided) → Use as-is
+2. Event metadata on_trigger/on_publish → Use if defined
+3. Built-in defaults → Use for well-known events
+4. Warning → Emitted if custom event has no metadata
+```
+
+### Validation
+
+Preflight validation warns if a custom event lacks metadata:
+
+```
+WARN Preflight: Custom event 'security.scan' used as trigger by 'scanner'
+     has no metadata. Add to 'events:' config or provide explicit instructions.
+```
+
+This warning is skipped if the hat has explicit `instructions` defined.
+
 ## CLI Usage
 
 ### Commands
@@ -737,6 +855,54 @@ The orchestrator owns all spawned CLI processes and must ensure no orphaned proc
 - **Given** custom hat extends default hats
 - **When** loop initializes
 - **Then** all hats (default + custom) are registered
+
+### Preflight Validation
+
+- **Given** config where hat publishes event with no subscriber
+- **When** preflight check runs
+- **Then** error is returned with "UnhandledEvent" specifying the dead-end event
+
+- **Given** config where no hat triggers on `task.start`
+- **When** preflight check runs
+- **Then** error is returned with "NoInitialHandler"
+
+- **Given** git checkpointing enabled but `git` not in PATH
+- **When** preflight check runs
+- **Then** error is returned with "GitNotAvailable"
+
+- **Given** preflight errors exist
+- **When** `ralph run` is executed
+- **Then** loop does not start and errors are displayed with fix suggestions
+
+- **Given** config with valid event flow graph
+- **When** preflight check runs
+- **Then** no errors are returned and loop proceeds
+
+### Event Metadata
+
+- **Given** custom event `deploy.start` with metadata defined
+- **When** hat triggers on `deploy.start` without explicit instructions
+- **Then** instructions are derived from `events.deploy.start.on_trigger`
+
+- **Given** custom event `deploy.done` with metadata defined
+- **When** hat publishes `deploy.done` without explicit instructions
+- **Then** instructions include guidance from `events.deploy.done.on_publish`
+
+- **Given** custom event without metadata and hat without instructions
+- **When** preflight check runs
+- **Then** warning is emitted about undefined event metadata
+
+- **Given** custom event without metadata but hat has explicit instructions
+- **When** preflight check runs
+- **Then** no warning is emitted (explicit instructions override)
+
+- **Given** well-known event `build.task` without metadata
+- **When** instructions are derived
+- **Then** built-in default behavior is used (no warning)
+
+- **Given** hat with triggers and publishes but no instructions
+- **When** prompt is built
+- **Then** derived behaviors are included with "MUST publish" rule appended
 
 ### Safeguards
 
