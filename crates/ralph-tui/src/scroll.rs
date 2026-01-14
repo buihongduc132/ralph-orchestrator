@@ -143,7 +143,7 @@ impl ScrollManager {
             if !search.matches.is_empty() {
                 search.current_match = (search.current_match + 1) % search.matches.len();
                 let line = search.matches[search.current_match];
-                drop(search);
+                let _ = search; // End the mutable borrow
                 self.jump_to_line(line);
             }
         }
@@ -159,7 +159,7 @@ impl ScrollManager {
                     search.current_match - 1
                 };
                 let line = search.matches[search.current_match];
-                drop(search);
+                let _ = search; // End the mutable borrow
                 self.jump_to_line(line);
             }
         }

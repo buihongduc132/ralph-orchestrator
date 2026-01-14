@@ -21,6 +21,7 @@ struct ScenarioYaml {
     expected: ExpectedYaml,
 }
 
+#[allow(dead_code)] // Test infrastructure - fields used for YAML deserialization
 #[derive(Debug, Deserialize)]
 struct ConfigYaml {
     prompt_file: String,
@@ -29,6 +30,7 @@ struct ConfigYaml {
     hats: serde_yaml::Value,
 }
 
+#[allow(dead_code)] // Test infrastructure - fields used for YAML deserialization
 #[derive(Debug, Deserialize)]
 struct ExpectedYaml {
     iterations: usize,
@@ -36,6 +38,7 @@ struct ExpectedYaml {
     completion: bool,
 }
 
+#[allow(dead_code)] // Test infrastructure - fields used for YAML deserialization
 #[derive(Debug, Deserialize)]
 struct EventYaml {
     topic: String,

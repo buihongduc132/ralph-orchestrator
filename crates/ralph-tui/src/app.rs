@@ -33,6 +33,7 @@ pub struct App {
 
 impl App {
     /// Creates a new App with shared state and PTY handle.
+    #[allow(dead_code)] // Public API - may be used by external callers
     pub fn new(state: Arc<Mutex<TuiState>>, pty_handle: PtyHandle) -> Self {
         Self::with_prefix(
             state,
