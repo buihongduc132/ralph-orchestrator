@@ -3,6 +3,13 @@
 use ralph_proto::{Event, HatId};
 use std::time::{Duration, Instant};
 
+/// Loop execution mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoopMode {
+    Auto,
+    Paused,
+}
+
 /// Observable state derived from loop events.
 pub struct TuiState {
     /// Which hat will process next event (ID + display name).
@@ -19,6 +26,8 @@ pub struct TuiState {
     pub last_event_at: Option<Instant>,
     /// Whether to show help overlay.
     pub show_help: bool,
+    /// Loop execution mode.
+    pub loop_mode: LoopMode,
 }
 
 impl TuiState {
@@ -32,6 +41,7 @@ impl TuiState {
             last_event: None,
             last_event_at: None,
             show_help: false,
+            loop_mode: LoopMode::Auto,
         }
     }
 

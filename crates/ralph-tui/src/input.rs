@@ -14,6 +14,7 @@ pub enum InputMode {
 pub enum Command {
     Quit,
     Help,
+    Pause,
     Unknown,
 }
 
@@ -54,6 +55,7 @@ impl InputRouter {
                     RouteResult::Command(match c {
                         'q' => Command::Quit,
                         '?' => Command::Help,
+                        'p' => Command::Pause,
                         _ => Command::Unknown,
                     })
                 } else {
@@ -153,5 +155,15 @@ mod tests {
             router.route_key(cmd),
             RouteResult::Command(Command::Unknown)
         );
+    }
+
+    #[test]
+    fn pause_command_returns_p() {
+        let mut router = InputRouter::new();
+        let prefix = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        router.route_key(prefix);
+
+        let cmd = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE);
+        assert_eq!(router.route_key(cmd), RouteResult::Command(Command::Pause));
     }
 }

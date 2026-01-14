@@ -5,7 +5,7 @@ use crate::state::TuiState;
 use crate::widgets::{footer, header, help, terminal::TerminalWidget};
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -17,6 +17,7 @@ use ratatui::{
 };
 use std::io;
 use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc;
 use tokio::time::{Duration, interval};
 
 /// Main TUI application.
@@ -24,6 +25,7 @@ pub struct App {
     state: Arc<Mutex<TuiState>>,
     terminal_widget: Arc<Mutex<TerminalWidget>>,
     input_router: InputRouter,
+    input_tx: mpsc::UnboundedSender<Vec<u8>>,
 }
 
 impl App {
@@ -31,10 +33,15 @@ impl App {
     pub fn new(state: Arc<Mutex<TuiState>>, pty_handle: PtyHandle) -> Self {
         let terminal_widget = Arc::new(Mutex::new(TerminalWidget::new()));
 
+        let PtyHandle {
+            mut output_rx,
+            input_tx,
+            ..
+        } = pty_handle;
+
         // Spawn task to read PTY output and feed to terminal widget
         let widget_clone = Arc::clone(&terminal_widget);
         tokio::spawn(async move {
-            let PtyHandle { mut output_rx, .. } = pty_handle;
             while let Some(bytes) = output_rx.recv().await {
                 if let Ok(mut widget) = widget_clone.lock() {
                     widget.process(&bytes);
@@ -46,6 +53,7 @@ impl App {
             state,
             terminal_widget,
             input_router: InputRouter::new(),
+            input_tx,
         }
     }
 
@@ -94,14 +102,28 @@ impl App {
                                 }
 
                                 match self.input_router.route_key(key) {
-                                    RouteResult::Forward(_) => {
-                                        // TODO: Forward to PTY in next step
+                                    RouteResult::Forward(key) => {
+                                        // Only forward to PTY if not paused
+                                        let is_paused = self.state.lock().unwrap().loop_mode == crate::state::LoopMode::Paused;
+                                        if !is_paused {
+                                            // Convert key to bytes and send to PTY
+                                            if let KeyCode::Char(c) = key.code {
+                                                let _ = self.input_tx.send(vec![c as u8]);
+                                            }
+                                        }
                                     }
                                     RouteResult::Command(cmd) => {
                                         match cmd {
                                             Command::Quit => break,
                                             Command::Help => {
                                                 self.state.lock().unwrap().show_help = true;
+                                            }
+                                            Command::Pause => {
+                                                let mut state = self.state.lock().unwrap();
+                                                state.loop_mode = match state.loop_mode {
+                                                    crate::state::LoopMode::Auto => crate::state::LoopMode::Paused,
+                                                    crate::state::LoopMode::Paused => crate::state::LoopMode::Auto,
+                                                };
                                             }
                                             Command::Unknown => {}
                                         }
