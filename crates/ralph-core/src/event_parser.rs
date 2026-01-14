@@ -8,6 +8,21 @@
 
 use ralph_proto::{Event, HatId};
 
+/// Evidence of backpressure checks for build.done events.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackpressureEvidence {
+    pub tests_passed: bool,
+    pub lint_passed: bool,
+    pub typecheck_passed: bool,
+}
+
+impl BackpressureEvidence {
+    /// Returns true if all checks passed.
+    pub fn all_passed(&self) -> bool {
+        self.tests_passed && self.lint_passed && self.typecheck_passed
+    }
+}
+
 /// Parser for extracting events from CLI output.
 #[derive(Debug, Default)]
 pub struct EventParser {
@@ -91,6 +106,31 @@ impl EventParser {
         let rest = &tag[value_start..];
         let end = rest.find('"')?;
         Some(rest[..end].to_string())
+    }
+
+    /// Parses backpressure evidence from build.done event payload.
+    ///
+    /// Expected format:
+    /// ```text
+    /// tests: pass
+    /// lint: pass
+    /// typecheck: pass
+    /// ```
+    pub fn parse_backpressure_evidence(payload: &str) -> Option<BackpressureEvidence> {
+        let tests_passed = payload.contains("tests: pass");
+        let lint_passed = payload.contains("lint: pass");
+        let typecheck_passed = payload.contains("typecheck: pass");
+
+        // Only return evidence if at least one check is mentioned
+        if payload.contains("tests:") || payload.contains("lint:") || payload.contains("typecheck:") {
+            Some(BackpressureEvidence {
+                tests_passed,
+                lint_passed,
+                typecheck_passed,
+            })
+        } else {
+            None
+        }
     }
 
     /// Checks if output contains the completion promise.
@@ -265,5 +305,42 @@ Still working..."#;
         let output = "just plain text";
         let stripped = EventParser::strip_event_tags(output);
         assert_eq!(stripped, "just plain text");
+    }
+
+    #[test]
+    fn test_parse_backpressure_evidence_all_pass() {
+        let payload = "tests: pass\nlint: pass\ntypecheck: pass";
+        let evidence = EventParser::parse_backpressure_evidence(payload).unwrap();
+        assert!(evidence.tests_passed);
+        assert!(evidence.lint_passed);
+        assert!(evidence.typecheck_passed);
+        assert!(evidence.all_passed());
+    }
+
+    #[test]
+    fn test_parse_backpressure_evidence_some_fail() {
+        let payload = "tests: pass\nlint: fail\ntypecheck: pass";
+        let evidence = EventParser::parse_backpressure_evidence(payload).unwrap();
+        assert!(evidence.tests_passed);
+        assert!(!evidence.lint_passed);
+        assert!(evidence.typecheck_passed);
+        assert!(!evidence.all_passed());
+    }
+
+    #[test]
+    fn test_parse_backpressure_evidence_missing() {
+        let payload = "Task completed successfully";
+        let evidence = EventParser::parse_backpressure_evidence(payload);
+        assert!(evidence.is_none());
+    }
+
+    #[test]
+    fn test_parse_backpressure_evidence_partial() {
+        let payload = "tests: pass\nSome other text";
+        let evidence = EventParser::parse_backpressure_evidence(payload).unwrap();
+        assert!(evidence.tests_passed);
+        assert!(!evidence.lint_passed);
+        assert!(!evidence.typecheck_passed);
+        assert!(!evidence.all_passed());
     }
 }

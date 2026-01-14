@@ -13,12 +13,12 @@
 | 🔴 P0 | Task-level block tracking missing | Loop terminates instead of replanning | ✅ Confirmed |
 | 🟡 P1 | Planner behaviors instruction-only | No verification of compliance | ✅ Confirmed |
 | 🟡 P1 | Builder behaviors instruction-only | No verification of compliance | ✅ Confirmed |
-| 🟡 P1 | Broken preset: gap-analysis.yml | Multi-document YAML parse error | ⚠️ Not re-validated |
-| 🟡 P1 | Broken preset: review.yml | Multi-document YAML parse error | ⚠️ Not re-validated |
-| 🟡 P1 | Broken preset: refactor.yml | Ambiguous routing (refactor.done) | ⚠️ Not re-validated |
+| 🟡 P1 | Broken preset: gap-analysis.yml | Multi-document YAML parse error | ✅ Confirmed |
+| 🟡 P1 | Broken preset: review.yml | Multi-document YAML parse error | ✅ Confirmed |
+| 🟡 P1 | Broken preset: refactor.yml | Ambiguous routing (refactor.done) | ✅ Confirmed |
 | 🟢 P2 | Scratchpad persistence not verified | State could be lost | ✅ Confirmed |
 | 🟢 P2 | Hat display order is random | Minor UX confusion | ✅ Confirmed |
-| 🟡 P1 | Broken ralph.yml in repo root | Default config causes parse error | ⚠️ Not re-validated |
+| 🟡 P1 | Broken ralph.yml in repo root | Default config causes parse error | ✅ Confirmed |
 
 ---
 

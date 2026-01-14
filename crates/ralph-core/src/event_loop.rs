@@ -8,7 +8,7 @@ use crate::hat_registry::HatRegistry;
 use crate::instructions::InstructionBuilder;
 use ralph_proto::{Event, EventBus, HatId};
 use std::time::{Duration, Instant};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Reason the event loop terminated.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -322,8 +322,47 @@ impl EventLoop {
         let parser = EventParser::new().with_source(hat_id.clone());
         let events = parser.parse(output);
 
+        // Validate build.done events have backpressure evidence
+        let mut validated_events = Vec::new();
+        for event in events {
+            if event.topic.as_str() == "build.done" {
+                if let Some(evidence) = EventParser::parse_backpressure_evidence(&event.payload) {
+                    if evidence.all_passed() {
+                        validated_events.push(event);
+                    } else {
+                        // Evidence present but checks failed - synthesize build.blocked
+                        warn!(
+                            hat = %hat_id.as_str(),
+                            tests = evidence.tests_passed,
+                            lint = evidence.lint_passed,
+                            typecheck = evidence.typecheck_passed,
+                            "build.done rejected: backpressure checks failed"
+                        );
+                        let blocked = Event::new(
+                            "build.blocked",
+                            "Backpressure checks failed. Fix tests/lint/typecheck before emitting build.done."
+                        ).with_source(hat_id.clone());
+                        validated_events.push(blocked);
+                    }
+                } else {
+                    // No evidence found - synthesize build.blocked
+                    warn!(
+                        hat = %hat_id.as_str(),
+                        "build.done rejected: missing backpressure evidence"
+                    );
+                    let blocked = Event::new(
+                        "build.blocked",
+                        "Missing backpressure evidence. Include 'tests: pass', 'lint: pass', 'typecheck: pass' in build.done payload."
+                    ).with_source(hat_id.clone());
+                    validated_events.push(blocked);
+                }
+            } else {
+                validated_events.push(event);
+            }
+        }
+
         // Track build.blocked events for thrashing detection
-        let has_blocked_event = events.iter().any(|e| e.topic == "build.blocked".into());
+        let has_blocked_event = validated_events.iter().any(|e| e.topic == "build.blocked".into());
         
         if has_blocked_event {
             // Check if same hat as last blocked event
@@ -344,7 +383,7 @@ impl EventLoop {
             self.state.last_blocked_hat = None;
         }
 
-        for event in events {
+        for event in validated_events {
             debug!(
                 topic = %event.topic,
                 source = ?event.source,

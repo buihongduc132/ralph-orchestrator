@@ -133,7 +133,15 @@ You're building, not planning. One task, then exit.
 
 4. **Commit.** One task, one commit. Mark `[x]` in scratchpad.
 
-5. **Exit.** Publish `<event topic="build.done">`. The loop continues.
+5. **Exit.** Publish `<event topic="build.done">` with evidence:
+   ```
+   <event topic="build.done">
+   tests: pass
+   lint: pass
+   typecheck: pass
+   </event>
+   ```
+   All three checks must show "pass" or the event will be rejected.
 
 ## DON'T
 
