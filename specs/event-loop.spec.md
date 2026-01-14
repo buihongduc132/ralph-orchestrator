@@ -1,6 +1,6 @@
 ---
-status: implemented
-gap_analysis: 2026-01-14
+status: review
+gap_analysis: 2026-01-13
 related:
   - cli-adapters.spec.md
   - interactive-mode.spec.md
@@ -956,11 +956,37 @@ The orchestrator owns all spawned CLI processes and must ensure no orphaned proc
 - **When** output is parsed
 - **Then** event is created with topic `build.done` and content as payload
 
-### Loop Termination
+### Loop Termination (Dual Condition)
+
+#### Task State Verification
 
 - **Given** Planner hat outputs `LOOP_COMPLETE`
-- **When** orchestrator parses output
+- **When** scratchpad contains pending `[ ]` tasks
+- **Then** completion is rejected, warning logged, `completion_confirmations` reset to 0
+
+- **Given** Planner hat outputs `LOOP_COMPLETE`
+- **When** all scratchpad tasks are `[x]` or `[~]`
+- **Then** `completion_confirmations` is incremented
+
+- **Given** scratchpad does not exist
+- **When** Planner outputs `LOOP_COMPLETE`
+- **Then** completion is rejected (no task state to verify)
+
+#### Consecutive Confirmation
+
+- **Given** Planner outputs `LOOP_COMPLETE` with valid task state (first time)
+- **When** `completion_confirmations` becomes 1
+- **Then** loop continues to next iteration (does NOT terminate yet)
+
+- **Given** Planner outputs `LOOP_COMPLETE` with valid task state (second consecutive time)
+- **When** `completion_confirmations` becomes 2
 - **Then** loop enters TERMINATING state and exits with code 0
+
+- **Given** Planner outputs `LOOP_COMPLETE` then does NOT output it next iteration
+- **When** confirmation chain is broken
+- **Then** `completion_confirmations` resets to 0
+
+#### Other Termination Rules
 
 - **Given** Builder hat outputs `LOOP_COMPLETE`
 - **When** orchestrator parses output
@@ -1162,7 +1188,7 @@ The orchestrator must detect when to exit the loop and report the outcome. Termi
 
 | Trigger | Detection | Exit Code |
 |---------|-----------|-----------|
-| **Completion promise** | Output contains `LOOP_COMPLETE` (or configured `completion_promise`) | 0 (success) |
+| **Completion promise** | Dual condition met: (1) all tasks `[x]`/`[~]` AND (2) `LOOP_COMPLETE` on 2 consecutive iterations | 0 (success) |
 | **Max iterations** | `iteration >= max_iterations` | 2 (limit) |
 | **Max runtime** | `elapsed >= max_runtime_seconds` | 2 (limit) |
 | **Consecutive failures** | `consecutive_failures >= max_consecutive_failures` | 1 (failure) |
@@ -1171,9 +1197,41 @@ The orchestrator must detect when to exit the loop and report the outcome. Termi
 
 **Note:** Cost tracking is the CLI tool's responsibility, not the orchestrator's. Claude, Kiro, etc. track their own usage.
 
-### Completion Detection
+### Completion Detection (Dual Condition)
 
-The orchestrator parses agent output after each iteration looking for:
+**Design rationale:** LLMs can be confident but wrong. A single `LOOP_COMPLETE` signal is just the agent's opinion. Dual condition exits add objective verification to prevent premature termination.
+
+The orchestrator requires **both conditions** to be satisfied before terminating:
+
+| Condition | What It Verifies | Why It Matters |
+|-----------|------------------|----------------|
+| **Task State** | All scratchpad tasks are `[x]` or `[~]` | Objective proof work is done |
+| **Consecutive Confirmation** | Planner outputs `LOOP_COMPLETE` on 2 consecutive iterations | Fresh context on 2nd iteration catches false confidence |
+
+#### Completion Flow
+
+```
+Iteration N: Planner outputs LOOP_COMPLETE
+    │
+    ├─► Check scratchpad: any `[ ]` pending tasks?
+    │       │
+    │       ├─► YES: Reject completion, log warning, continue loop
+    │       │        (completion_confirmations reset to 0)
+    │       │
+    │       └─► NO: Record confirmation (completion_confirmations = 1)
+    │                Continue to iteration N+1
+    │
+Iteration N+1: Planner outputs LOOP_COMPLETE again (fresh context)
+    │
+    ├─► Check scratchpad again: any `[ ]` pending tasks?
+    │       │
+    │       ├─► YES: Reject, reset counter
+    │       │
+    │       └─► NO: completion_confirmations = 2
+    │                ✓ TERMINATE with CompletionPromise
+```
+
+#### Detection Rules
 
 1. **Completion promise** — The exact string from `completion_promise` config (default: `LOOP_COMPLETE`)
 2. **Event tags** — `<event topic="...">` blocks for routing
@@ -1183,6 +1241,18 @@ Completion promise detection:
 - Can be on its own line or inline: `All tasks done. LOOP_COMPLETE`
 - Case-sensitive match against configured `completion_promise`
 - Only valid when Planner hat is active (Builder cannot terminate the loop)
+- **Requires task state verification** — rejected if pending `[ ]` tasks exist
+- **Requires consecutive confirmation** — must pass verification on 2 consecutive iterations
+
+#### Why Consecutive Confirmation?
+
+Fresh context is Ralph's superpower. On the second iteration:
+- The agent re-reads the scratchpad from scratch
+- No memory of "I already said I'm done"
+- If work is truly complete, the agent will independently conclude the same thing
+- If the first completion was premature, fresh eyes often catch what was missed
+
+This adds ~1 iteration overhead but dramatically improves completion confidence.
 
 ### Termination Flow
 
@@ -1236,28 +1306,42 @@ When the loop terminates due to safeguards (not completion promise):
                              │ publish task.start
                              ▼
                     ┌─────────────────┐
-          ┌────────►│    RUNNING      │◄────────┐
-          │         └────────┬────────┘         │
-          │                  │                  │
-          │    ┌─────────────┼─────────────┐    │
-          │    ▼             ▼             ▼    │
-     build.done      build.blocked    completion
-          │                  │         promise
-          │                  │             │
-          │                  ▼             ▼
-          │         ┌─────────────┐  ┌──────────┐
-          └─────────│  RUNNING    │  │TERMINATING│
-                    └─────────────┘  └─────┬────┘
-                                           │
-                    ┌─────────────────┐    │
-                    │  SAFEGUARD HIT  │────┤
-                    └─────────────────┘    │
-                             │             │
-                             ▼             ▼
-                    ┌─────────────────────────┐
-                    │        EXITED           │
-                    │  (summary, exit code)   │
-                    └─────────────────────────┘
+          ┌────────►│    RUNNING      │◄────────────────────┐
+          │         └────────┬────────┘                     │
+          │                  │                              │
+          │    ┌─────────────┼─────────────┐                │
+          │    ▼             ▼             ▼                │
+     build.done      build.blocked    LOOP_COMPLETE         │
+          │                  │             │                │
+          │                  │             ▼                │
+          │                  │    ┌────────────────┐        │
+          │                  │    │ Check Tasks    │        │
+          │                  │    │ (any [ ] ?)    │        │
+          │                  │    └───────┬────────┘        │
+          │                  │            │                 │
+          │                  │      ┌─────┴─────┐           │
+          │                  │      ▼           ▼           │
+          │                  │   pending     all done       │
+          │                  │      │           │           │
+          │                  │      │     ┌─────┴─────┐     │
+          │                  │      │     ▼           ▼     │
+          │                  │      │  1st confirm  2nd confirm
+          │                  │      │     │           │     │
+          │                  ▼      ▼     ▼           ▼     │
+          │         ┌─────────────────────┐    ┌──────────┐ │
+          └─────────│      RUNNING        │    │TERMINATING│ │
+                    │  (reset confirms)   │────┘└─────┬────┘
+                    └─────────────────────┘           │
+                                                      │
+                    ┌─────────────────┐               │
+                    │  SAFEGUARD HIT  │───────────────┤
+                    └─────────────────┘               │
+                             │                        │
+                             ▼                        ▼
+                    ┌─────────────────────────────────┐
+                    │            EXITED               │
+                    │     (summary, exit code)        │
+                    └─────────────────────────────────┘
 ```
 
 ## Log Messages
