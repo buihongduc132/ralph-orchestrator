@@ -17,6 +17,7 @@
 | 🟡 P1 | Broken preset: refactor.yml | Ambiguous routing (refactor.done) |
 | 🟢 P2 | Scratchpad persistence not verified | State could be lost |
 | 🟢 P2 | Hat display order is random | Minor UX confusion |
+| 🟡 P1 | Broken ralph.yml in repo root | Default config causes parse error |
 
 ---
 
@@ -291,6 +292,45 @@ Minor UX confusion. Users may expect to see hats in the order they appear in the
 3. Sort by trigger order (task.start first, etc.)
 
 **Location:** `crates/ralph-cli/src/main.rs:346`
+
+---
+
+## 🟡 P1: Broken ralph.yml in Repo Root
+
+**Problem:**
+The default `ralph.yml` configuration file in the repository root uses v1-style flat configuration that doesn't match the v2 nested schema. Specifically:
+- `adapters.claude.tool_permissions` is a map (`allow_all: true`) but the schema expects a sequence (`["read", "write"]`)
+- `adapters.acp.tool_permissions` contains undefined fields (`agent_command`, `agent_args`, `permission_mode`, `permission_allowlist`)
+
+**Error:**
+```
+YAML parse error: adapters.claude.tool_permissions: invalid type: map, expected a sequence at line 49 column 7
+```
+
+**Impact:**
+Users who clone the repo and try to use the default config (`ralph run`) get a parse error. The fallback (no config file) works, but having a broken default config is confusing.
+
+**Current (broken):**
+```yaml
+adapters:
+  claude:
+    tool_permissions:         # Tool permissions for Claude
+      allow_all: true         # Map - causes parse error
+```
+
+**Expected:**
+```yaml
+adapters:
+  claude:
+    tool_permissions: ["read", "write"]  # Sequence - matches schema
+    # Or just remove the field (it's a dropped feature anyway)
+```
+
+**Fix Options:**
+1. **Remove tool_permissions entirely** - it's a dropped feature per the comments in config.rs
+2. **Update to sequence format** - if keeping for documentation purposes
+
+**Location:** `ralph.yml:48-49`, `ralph.yml:91-95`
 
 ---
 
