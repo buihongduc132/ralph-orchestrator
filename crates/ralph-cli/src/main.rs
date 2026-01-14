@@ -932,6 +932,10 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
     // Track the last hat to detect hat changes for logging
     let mut last_hat: Option<HatId> = None;
 
+    // Track consecutive fallback attempts to prevent infinite loops
+    let mut consecutive_fallbacks: u32 = 0;
+    const MAX_FALLBACK_ATTEMPTS: u32 = 3;
+
     // Helper closure to handle termination (writes summary, prints status, creates final checkpoint)
     let handle_termination = |reason: &TerminationReason, state: &ralph_core::LoopState, git_checkpoint: bool, scratchpad: &str| {
         // Per spec: Write summary file on termination
@@ -976,12 +980,43 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
             return Ok(reason);
         }
 
-        // Get next hat to execute
+        // Get next hat to execute, with fallback recovery if no pending events
         let hat_id = match event_loop.next_hat() {
-            Some(id) => id.clone(),
+            Some(id) => {
+                // Reset fallback counter on successful event routing
+                consecutive_fallbacks = 0;
+                id.clone()
+            }
             None => {
-                warn!("No hats with pending events, terminating");
-                // No pending events is treated as stopped (not a success)
+                // No pending events - try to recover by injecting a fallback event
+                // This triggers the built-in planner to assess the situation
+                consecutive_fallbacks += 1;
+
+                if consecutive_fallbacks > MAX_FALLBACK_ATTEMPTS {
+                    warn!(
+                        attempts = consecutive_fallbacks,
+                        "Fallback recovery exhausted after {} attempts, terminating",
+                        MAX_FALLBACK_ATTEMPTS
+                    );
+                    let reason = TerminationReason::Stopped;
+                    let terminate_event = event_loop.publish_terminate_event(&reason);
+                    log_terminate_event(&mut event_logger, event_loop.state().iteration, &terminate_event);
+                    handle_termination(&reason, event_loop.state(), config.git_checkpoint, &config.core.scratchpad);
+                    cleanup_tui(tui_handle);
+                    return Ok(reason);
+                }
+
+                if event_loop.inject_fallback_event() {
+                    // Fallback injected successfully, continue to next iteration
+                    // The planner will be triggered and can either:
+                    // - Dispatch more work if tasks remain
+                    // - Output LOOP_COMPLETE if done
+                    // - Determine what went wrong and recover
+                    continue;
+                }
+
+                // Fallback not possible (no planner hat or doesn't subscribe to task.resume)
+                warn!("No hats with pending events and fallback not available, terminating");
                 let reason = TerminationReason::Stopped;
                 // Per spec: Publish loop.terminate event to observers
                 let terminate_event = event_loop.publish_terminate_event(&reason);

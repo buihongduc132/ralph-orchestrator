@@ -410,6 +410,9 @@ async fn run_task_loop(
 
     // Main orchestration loop
     let termination_reason: TerminationReason;
+    let mut consecutive_fallbacks: u32 = 0;
+    const MAX_FALLBACK_ATTEMPTS: u32 = 3;
+
     loop {
         // Check termination before execution
         if let Some(reason) = event_loop.check_termination() {
@@ -417,11 +420,31 @@ async fn run_task_loop(
             break;
         }
 
-        // Get next hat to execute
+        // Get next hat to execute, with fallback recovery if no pending events
         let hat_id = match event_loop.next_hat() {
-            Some(id) => id.clone(),
+            Some(id) => {
+                consecutive_fallbacks = 0;
+                id.clone()
+            }
             None => {
-                warn!("No hats with pending events, terminating");
+                // No pending events - try to recover by injecting a fallback event
+                consecutive_fallbacks += 1;
+
+                if consecutive_fallbacks > MAX_FALLBACK_ATTEMPTS {
+                    warn!(
+                        attempts = consecutive_fallbacks,
+                        "Fallback recovery exhausted after {} attempts, terminating",
+                        MAX_FALLBACK_ATTEMPTS
+                    );
+                    termination_reason = TerminationReason::Stopped;
+                    break;
+                }
+
+                if event_loop.inject_fallback_event() {
+                    continue;
+                }
+
+                warn!("No hats with pending events and fallback not available, terminating");
                 termination_reason = TerminationReason::Stopped;
                 break;
             }

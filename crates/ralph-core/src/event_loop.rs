@@ -273,6 +273,31 @@ impl EventLoop {
             .unwrap_or_default()
     }
 
+    /// Injects a fallback event to recover from a stalled loop.
+    ///
+    /// When no hats have pending events (agent failed to publish), this method
+    /// injects a `task.resume` event to trigger the planner with built-in
+    /// instructions to attempt recovery.
+    ///
+    /// Returns true if a fallback event was injected, false if recovery is not possible.
+    pub fn inject_fallback_event(&mut self) -> bool {
+        // Only inject fallback if planner hat exists and can be triggered by task.resume
+        let planner_id = HatId::new("planner");
+        if let Some(hat) = self.registry.get(&planner_id) {
+            if hat.subscriptions.iter().any(|t| t.as_str() == "task.resume") {
+                let fallback_event = Event::new(
+                    "task.resume",
+                    "RECOVERY: Previous iteration did not publish an event. \
+                     Review the scratchpad and either dispatch the next task or complete the loop."
+                );
+                info!("Injecting fallback event to recover - triggering planner with task.resume");
+                self.bus.publish(fallback_event);
+                return true;
+            }
+        }
+        false
+    }
+
     /// Builds the prompt for a hat's execution.
     ///
     /// Per spec: Default hats (planner/builder) use specialized rich prompts
@@ -294,16 +319,27 @@ impl EventLoop {
 
         // Default planner and builder hats use specialized prompts per spec
         // Custom hats (or defaults with custom instructions) use build_custom_hat
+        // If a hat has non-default publishes, use derived instructions to ensure
+        // all events are properly documented (e.g., planner with review.request)
+        let is_default_planner = hat.instructions.is_empty()
+            && hat.publishes.len() == 1
+            && hat.publishes.iter().any(|t| t.as_str() == "build.task");
+        let is_default_builder = hat.instructions.is_empty()
+            && hat.publishes.len() == 2
+            && hat.publishes.iter().any(|t| t.as_str() == "build.done")
+            && hat.publishes.iter().any(|t| t.as_str() == "build.blocked");
+
         match hat_id.as_str() {
-            "planner" if hat.instructions.is_empty() => {
-                debug!("build_prompt: routing to build_coordinator() for planner");
+            "planner" if is_default_planner => {
+                debug!("build_prompt: routing to build_coordinator() for default planner");
                 Some(self.instruction_builder.build_coordinator(&events_context))
             }
-            "builder" if hat.instructions.is_empty() => {
-                debug!("build_prompt: routing to build_ralph() for builder");
+            "builder" if is_default_builder => {
+                debug!("build_prompt: routing to build_ralph() for default builder");
                 Some(self.instruction_builder.build_ralph(&events_context))
             }
             _ => {
+                // Custom hats, or default hats with extended pub/sub, use derived instructions
                 debug!("build_prompt: routing to build_custom_hat() for '{}'", hat_id.as_str());
                 Some(self.instruction_builder.build_custom_hat(hat, &events_context))
             }

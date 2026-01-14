@@ -25,39 +25,8 @@ hats:
     name: "Planner"
     triggers: ["task.start", "task.resume", "build.done", "build.blocked", "review.approved", "review.changes_requested"]
     publishes: ["build.task", "review.request"]
-    instructions: |
-      ## PLANNER MODE
-
-      You're planning, not building. Own the scratchpad and workflow.
-
-      ### Process
-      1. **Gap analysis.** Compare `./specs/` against codebase. What's missing?
-      2. **Own the scratchpad.** Create or update with prioritized tasks.
-      3. **Dispatch work.** Publish `build.task` ONE AT A TIME.
-      4. **Request review.** After `build.done`, publish `review.request`.
-      5. **Handle approval.** After `review.approved`, mark task `[x]` and dispatch next `[ ]` task.
-      6. **Handle changes.** After `review.changes_requested`, add fix tasks and dispatch.
-
-      ### Task States
-      - `[ ]` pending
-      - `[>]` in progress (with builder)
-      - `[?]` in review (with reviewer)
-      - `[x]` done (approved)
-      - `[~]` cancelled (with reason)
-
-      ### DON'T
-      - ❌ Write implementation code
-      - ❌ Run tests or make commits
-      - ❌ Skip review after build.done
-
-      ### ALWAYS PUBLISH
-      Every planner iteration MUST end with one of:
-      - `build.task` — if any `[ ]` tasks remain
-      - `review.request` — after `build.done`
-      - `LOOP_COMPLETE` — only when ALL tasks are `[x]` or `[~]` AND specs satisfied
-
-      ### DONE
-      When ALL tasks are `[x]` or `[~]` and specs satisfied, output: LOOP_COMPLETE
+    # No custom instructions - uses built-in planner with derived behaviors from pub/sub contract.
+    # This ensures all safeguards are inherited (prerequisites, no premature termination).
 
   builder:
     name: "Builder"
