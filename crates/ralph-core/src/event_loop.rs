@@ -7,6 +7,7 @@ use crate::event_parser::EventParser;
 use crate::hat_registry::HatRegistry;
 use crate::instructions::InstructionBuilder;
 use ralph_proto::{Event, EventBus, HatId};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
@@ -89,6 +90,12 @@ pub struct LoopState {
     pub consecutive_blocked: u32,
     /// Hat that emitted the last blocked event.
     pub last_blocked_hat: Option<HatId>,
+    /// Per-task block counts for task-level thrashing detection.
+    pub task_block_counts: HashMap<String, u32>,
+    /// Tasks that have been abandoned after 3+ blocks.
+    pub abandoned_tasks: Vec<String>,
+    /// Count of times planner dispatched an already-abandoned task.
+    pub abandoned_task_redispatches: u32,
 }
 
 impl Default for LoopState {
@@ -102,6 +109,9 @@ impl Default for LoopState {
             checkpoint_count: 0,
             consecutive_blocked: 0,
             last_blocked_hat: None,
+            task_block_counts: HashMap::new(),
+            abandoned_tasks: Vec::new(),
+            abandoned_task_redispatches: 0,
         }
     }
 }
@@ -198,8 +208,8 @@ impl EventLoop {
             return Some(TerminationReason::ConsecutiveFailures);
         }
 
-        // Check for loop thrashing (3+ consecutive blocked events from same hat)
-        if self.state.consecutive_blocked >= 3 {
+        // Check for loop thrashing: planner keeps dispatching abandoned tasks
+        if self.state.abandoned_task_redispatches >= 3 {
             return Some(TerminationReason::LoopThrashing);
         }
 
@@ -361,8 +371,67 @@ impl EventLoop {
             }
         }
 
-        // Track build.blocked events for thrashing detection
-        let has_blocked_event = validated_events.iter().any(|e| e.topic == "build.blocked".into());
+        // Track build.blocked events for task-level thrashing detection
+        let blocked_events: Vec<_> = validated_events.iter()
+            .filter(|e| e.topic == "build.blocked".into())
+            .collect();
+        
+        for blocked_event in &blocked_events {
+            // Extract task ID from first line of payload
+            let task_id = Self::extract_task_id(&blocked_event.payload);
+            
+            // Increment block count for this task
+            let count = self.state.task_block_counts.entry(task_id.clone()).or_insert(0);
+            *count += 1;
+            
+            debug!(
+                task_id = %task_id,
+                block_count = *count,
+                "Task blocked"
+            );
+            
+            // After 3 blocks on same task, emit build.task.abandoned
+            if *count >= 3 && !self.state.abandoned_tasks.contains(&task_id) {
+                warn!(
+                    task_id = %task_id,
+                    "Task abandoned after 3 consecutive blocks"
+                );
+                
+                self.state.abandoned_tasks.push(task_id.clone());
+                
+                let abandoned_event = Event::new(
+                    "build.task.abandoned",
+                    format!("Task '{}' abandoned after 3 consecutive build.blocked events", task_id)
+                ).with_source(hat_id.clone());
+                
+                self.bus.publish(abandoned_event);
+            }
+        }
+        
+        // Track build.task events to detect redispatch of abandoned tasks
+        let task_events: Vec<_> = validated_events.iter()
+            .filter(|e| e.topic == "build.task".into())
+            .collect();
+        
+        for task_event in task_events {
+            let task_id = Self::extract_task_id(&task_event.payload);
+            
+            // Check if this task was already abandoned
+            if self.state.abandoned_tasks.contains(&task_id) {
+                self.state.abandoned_task_redispatches += 1;
+                warn!(
+                    task_id = %task_id,
+                    redispatch_count = self.state.abandoned_task_redispatches,
+                    "Planner redispatched abandoned task"
+                );
+            } else {
+                // Reset redispatch counter on non-abandoned task
+                self.state.abandoned_task_redispatches = 0;
+            }
+        }
+        
+        // Track hat-level blocking for legacy thrashing detection
+        let has_blocked_event = !blocked_events.is_empty();
         
         if has_blocked_event {
             // Check if same hat as last blocked event
@@ -372,11 +441,6 @@ impl EventLoop {
                 self.state.consecutive_blocked = 1;
                 self.state.last_blocked_hat = Some(hat_id.clone());
             }
-            debug!(
-                hat = %hat_id.as_str(),
-                consecutive_blocked = self.state.consecutive_blocked,
-                "Detected build.blocked event"
-            );
         } else {
             // Reset counter on any non-blocked event
             self.state.consecutive_blocked = 0;
@@ -395,6 +459,16 @@ impl EventLoop {
 
         // Check termination conditions
         self.check_termination()
+    }
+    
+    /// Extracts task identifier from build.blocked payload.
+    /// Uses first line of payload as task ID.
+    fn extract_task_id(payload: &str) -> String {
+        payload.lines()
+            .next()
+            .unwrap_or("unknown")
+            .trim()
+            .to_string()
     }
 
     /// Returns true if a checkpoint should be created at this iteration.
@@ -669,21 +743,32 @@ hats:
         event_loop.initialize("Test");
 
         let planner_id = HatId::new("planner");
+        let builder_id = HatId::new("builder");
 
-        // First blocked event - should not terminate
-        let reason = event_loop.process_output(&planner_id, "<event topic=\"build.blocked\">Stuck</event>", true);
-        assert_eq!(reason, None);
-        assert_eq!(event_loop.state.consecutive_blocked, 1);
-
-        // Second blocked event from same hat - should not terminate
-        let reason = event_loop.process_output(&planner_id, "<event topic=\"build.blocked\">Still stuck</event>", true);
-        assert_eq!(reason, None);
-        assert_eq!(event_loop.state.consecutive_blocked, 2);
-
-        // Third blocked event from same hat - should terminate with thrashing
-        let reason = event_loop.process_output(&planner_id, "<event topic=\"build.blocked\">Really stuck</event>", true);
+        // Planner dispatches task "Fix bug"
+        event_loop.process_output(&planner_id, "<event topic=\"build.task\">Fix bug</event>", true);
+        
+        // Builder blocks on "Fix bug" three times (should emit build.task.abandoned)
+        event_loop.process_output(&builder_id, "<event topic=\"build.blocked\">Fix bug\nCan't compile</event>", true);
+        event_loop.process_output(&builder_id, "<event topic=\"build.blocked\">Fix bug\nStill can't compile</event>", true);
+        event_loop.process_output(&builder_id, "<event topic=\"build.blocked\">Fix bug\nReally stuck</event>", true);
+        
+        // Task should be abandoned but loop continues
+        assert!(event_loop.state.abandoned_tasks.contains(&"Fix bug".to_string()));
+        assert_eq!(event_loop.state.abandoned_task_redispatches, 0);
+        
+        // Planner redispatches the same abandoned task
+        event_loop.process_output(&planner_id, "<event topic=\"build.task\">Fix bug</event>", true);
+        assert_eq!(event_loop.state.abandoned_task_redispatches, 1);
+        
+        // Planner redispatches again
+        event_loop.process_output(&planner_id, "<event topic=\"build.task\">Fix bug</event>", true);
+        assert_eq!(event_loop.state.abandoned_task_redispatches, 2);
+        
+        // Third redispatch should trigger LoopThrashing
+        let reason = event_loop.process_output(&planner_id, "<event topic=\"build.task\">Fix bug</event>", true);
         assert_eq!(reason, Some(TerminationReason::LoopThrashing));
-        assert_eq!(event_loop.state.consecutive_blocked, 3);
+        assert_eq!(event_loop.state.abandoned_task_redispatches, 3);
     }
 
     #[test]
@@ -918,27 +1003,39 @@ LOOP_COMPLETE
 
     #[test]
     fn test_planner_auto_cancellation_after_three_blocks() {
-        // Test that planner should auto-cancel tasks after 3 build.blocked events for same task
+        // Test that task is abandoned after 3 build.blocked events for same task
         let config = RalphConfig::default();
         let mut event_loop = EventLoop::new(config);
         event_loop.initialize("Test task");
 
         let builder_id = HatId::new("builder");
+        let planner_id = HatId::new("planner");
         
-        // First blocked event - should not terminate
-        let reason = event_loop.process_output(&builder_id, r#"<event topic="build.blocked">Task X failed: missing dependency</event>"#, true);
+        // First blocked event for "Task X" - should not abandon
+        let reason = event_loop.process_output(&builder_id, "<event topic=\"build.blocked\">Task X\nmissing dependency</event>", true);
         assert_eq!(reason, None);
-        assert_eq!(event_loop.state.consecutive_blocked, 1);
+        assert_eq!(event_loop.state.task_block_counts.get("Task X"), Some(&1));
 
-        // Second blocked event - should not terminate  
-        let reason = event_loop.process_output(&builder_id, r#"<event topic="build.blocked">Task X still failing: dependency issue persists</event>"#, true);
+        // Second blocked event for "Task X" - should not abandon
+        let reason = event_loop.process_output(&builder_id, "<event topic=\"build.blocked\">Task X\ndependency issue persists</event>", true);
         assert_eq!(reason, None);
-        assert_eq!(event_loop.state.consecutive_blocked, 2);
+        assert_eq!(event_loop.state.task_block_counts.get("Task X"), Some(&2));
 
-        // Third blocked event - should trigger loop thrashing termination
-        // This simulates the condition where planner should auto-cancel the task
-        let reason = event_loop.process_output(&builder_id, r#"<event topic="build.blocked">Task X repeatedly failing: same dependency issue</event>"#, true);
-        assert_eq!(reason, Some(TerminationReason::LoopThrashing), "Should terminate after 3 consecutive blocks");
-        assert_eq!(event_loop.state.consecutive_blocked, 3);
+        // Third blocked event for "Task X" - should emit build.task.abandoned but not terminate
+        let reason = event_loop.process_output(&builder_id, "<event topic=\"build.blocked\">Task X\nsame dependency issue</event>", true);
+        assert_eq!(reason, None, "Should not terminate, just abandon task");
+        assert_eq!(event_loop.state.task_block_counts.get("Task X"), Some(&3));
+        assert!(event_loop.state.abandoned_tasks.contains(&"Task X".to_string()), "Task X should be abandoned");
+        
+        // Planner can now replan around the abandoned task
+        // Only terminates if planner keeps redispatching the abandoned task
+        event_loop.process_output(&planner_id, "<event topic=\"build.task\">Task X</event>", true);
+        assert_eq!(event_loop.state.abandoned_task_redispatches, 1);
+        
+        event_loop.process_output(&planner_id, "<event topic=\"build.task\">Task X</event>", true);
+        assert_eq!(event_loop.state.abandoned_task_redispatches, 2);
+        
+        let reason = event_loop.process_output(&planner_id, "<event topic=\"build.task\">Task X</event>", true);
+        assert_eq!(reason, Some(TerminationReason::LoopThrashing), "Should terminate after 3 redispatches of abandoned task");
     }
 }

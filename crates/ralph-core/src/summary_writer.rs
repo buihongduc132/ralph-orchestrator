@@ -224,6 +224,9 @@ mod tests {
             checkpoint_count: 2,
             consecutive_blocked: 0,
             last_blocked_hat: None,
+            task_block_counts: std::collections::HashMap::new(),
+            abandoned_tasks: Vec::new(),
+            abandoned_task_redispatches: 0,
         }
     }
 

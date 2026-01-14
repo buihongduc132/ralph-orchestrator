@@ -9,7 +9,6 @@
 
 | Priority | Issue | Impact | Status |
 |----------|-------|--------|--------|
-| 🔴 P0 | Backpressure not enforced | Builder can skip tests | ✅ Confirmed |
 | 🔴 P0 | Task-level block tracking missing | Loop terminates instead of replanning | ✅ Confirmed |
 | 🟡 P1 | Planner behaviors instruction-only | No verification of compliance | ✅ Confirmed |
 | 🟡 P1 | Builder behaviors instruction-only | No verification of compliance | ✅ Confirmed |
@@ -19,68 +18,6 @@
 | 🟢 P2 | Scratchpad persistence not verified | State could be lost | ✅ Confirmed |
 | 🟢 P2 | Hat display order is random | Minor UX confusion | ✅ Confirmed |
 | 🟡 P1 | Broken ralph.yml in repo root | Default config causes parse error | ✅ Confirmed |
-
----
-
-## 🔴 P0: Backpressure Not Enforced
-
-**Behaviors:** BU-002, BU-003, BU-004
-
-**Status:** ✅ **CONFIRMED** via code review (2026-01-13)
-
-**Problem:**
-Spec says builder must run tests/lint/typecheck before emitting `build.done`. Implementation only injects instruction text—orchestrator accepts any `build.done` without verification.
-
-**Impact:**
-Builder can claim success without running checks. Broken code proceeds uncaught.
-
-**Code Evidence:**
-```rust
-// crates/ralph-core/src/event_loop.rs:297-360
-pub fn process_output(
-    &mut self,
-    hat_id: &HatId,
-    output: &str,
-    success: bool,
-) -> Option<TerminationReason> {
-    // ... iteration tracking ...
-    
-    // Parse and publish events from output
-    let parser = EventParser::new().with_source(hat_id.clone());
-    let events = parser.parse(output);
-    
-    // ❌ NO VALIDATION: Events are published without checking evidence
-    for event in events {
-        self.bus.publish(event);
-    }
-    // ...
-}
-```
-
-The `EventParser` (event_parser.rs:1-250) only extracts topic, target, and payload. It does NOT parse or validate evidence of backpressure checks.
-
-**Current:**
-```
-Prompt says: "Backpressure is law - tests/typecheck/lint must pass"
-Orchestrator: Accepts any build.done event
-```
-
-**Expected:**
-```
-Builder emits: build.done with evidence (tests passed, lint passed)
-Orchestrator: Parses evidence, rejects if missing/failed
-```
-
-**Fix:**
-1. Define evidence schema for `build.done` payload
-2. Parse evidence in `event_parser.rs`
-3. Reject `build.done` without valid evidence in `event_loop.rs`
-4. On rejection, synthesize `build.blocked` with "missing backpressure evidence"
-
-**Files:**
-- `crates/ralph-core/src/event_parser.rs`
-- `crates/ralph-core/src/event_loop.rs`
-- `crates/ralph-core/src/instructions.rs` (update builder prompt with evidence format)
 
 ---
 
@@ -397,4 +334,16 @@ adapters:
 
 _(Move issues here when fixed, then delete after next release)_
 
-None yet.
+### ✅ P0: Backpressure Not Enforced (Fixed 2026-01-13)
+
+**Behaviors:** BU-002, BU-003, BU-004
+
+**Problem:** Builder could emit `build.done` without running tests/lint/typecheck. Orchestrator accepted any `build.done` event without verification.
+
+**Solution:** 
+- Added `BackpressureEvidence` struct to parse evidence from `build.done` payload
+- Orchestrator validates evidence before accepting `build.done`
+- Synthesizes `build.blocked` if evidence missing or checks failed
+- Updated builder instructions with required evidence format
+
+**Commit:** 9440d44c
