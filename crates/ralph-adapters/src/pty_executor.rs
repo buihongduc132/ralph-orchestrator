@@ -365,6 +365,7 @@ impl PtyExecutor {
 
         let mut ctrl_c_state = CtrlCState::new();
         let mut termination = TerminationType::Natural;
+        let mut last_activity = Instant::now();
 
         // Flag for termination request (shared with spawned tasks)
         let should_terminate = Arc::new(AtomicBool::new(false));
@@ -473,7 +474,14 @@ impl PtyExecutor {
             // Build the timeout future (or a never-completing one if disabled)
             let timeout_future = async {
                 match timeout_duration {
-                    Some(d) => tokio::time::sleep(d).await,
+                    Some(d) => {
+                        let elapsed = last_activity.elapsed();
+                        if elapsed >= d {
+                            tokio::time::sleep(Duration::ZERO).await
+                        } else {
+                            tokio::time::sleep(d - elapsed).await
+                        }
+                    }
                     None => std::future::pending::<()>().await,
                 }
             };
@@ -486,7 +494,7 @@ impl PtyExecutor {
                             io::stdout().write_all(&data)?;
                             io::stdout().flush()?;
                             output.extend_from_slice(&data);
-                            // Activity detected - timeout will reset on next iteration
+                            last_activity = Instant::now();
                         }
                         Some(OutputEvent::Eof) => {
                             debug!("PTY EOF received");
@@ -512,7 +520,7 @@ impl PtyExecutor {
                                     // Forward Ctrl+C to Claude
                                     let _ = writer.write_all(&[3]);
                                     let _ = writer.flush();
-                                    // Activity: user input resets timeout
+                                    last_activity = Instant::now();
                                 }
                                 CtrlCAction::Terminate => {
                                     info!("Double Ctrl+C detected, terminating");
@@ -534,7 +542,7 @@ impl PtyExecutor {
                             // Forward to Claude
                             let _ = writer.write_all(&data);
                             let _ = writer.flush();
-                            // Activity: user input resets timeout
+                            last_activity = Instant::now();
                         }
                         None => {
                             // Input channel closed (stdin EOF)

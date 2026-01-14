@@ -53,38 +53,52 @@ Each hat in a collection must conform to:
 <hat_id>:
   name: string              # Human-readable name (required)
   triggers: [string]        # Events that activate this hat (required, non-empty)
+                            # Alias: "subscriptions" is accepted for backwards compatibility
   publishes: [string]       # Events this hat can emit (optional, defaults to [])
   instructions: string      # Custom instructions for this hat (optional)
 ```
 
+**Note on self-routing:** A hat MAY trigger on events it also publishes (self-routing). This is allowed and is NOT considered "ambiguous routing." Ambiguous routing only occurs when two DIFFERENT hats trigger on the same event. See `event-loop.spec.md` section "Self-Routing Is Allowed" for rationale.
+
 ### Terminal Events
 
-Terminal events are events that intentionally have no subscriber. They signal workflow completion or hand-off to external systems. Terminal events must be explicitly declared:
+Terminal events are events that intentionally have no subscriber. They signal workflow completion or hand-off to external systems.
+
+**Currently implemented:** The following events are hardcoded as terminal:
+- `LOOP_COMPLETE` (built-in default)
+- The configured `completion_promise` value
+
+**To be implemented:** User-declared terminal events via config:
 
 ```yaml
 event_loop:
   terminal_events:
-    - "LOOP_COMPLETE"       # Built-in default
     - "deploy.complete"     # Custom terminal event
 ```
 
-Events listed in `terminal_events` are exempt from the "no dead ends" validation.
+Events listed in `terminal_events` would be exempt from the "no dead ends" validation.
 
 ### Recovery Hat Requirement
 
-Collections with more than one hat MUST designate a recovery hat that:
+Collections with more than one hat MUST have a recovery hat that:
 
-1. Subscribes to `task.resume`
-2. Can receive blocked events from other hats
+1. Subscribes to `task.resume` (to handle loop resumption)
+2. Can receive blocked events from other hats (to handle stuck states)
 
-By default, the hat named `planner` is the recovery hat. Custom collections can override:
+**Currently implemented:**
+- The fallback injection logic in `event_loop.rs` hardcodes `planner` as the recovery hat
+- No validation exists to verify the recovery hat subscribes to required events
+
+**To be implemented:**
+- Configurable recovery hat via `event_loop.recovery_hat`
+- Validation that the recovery hat subscribes to `task.resume`
 
 ```yaml
 event_loop:
   recovery_hat: "coordinator"  # Default: "planner"
 ```
 
-If no recovery hat exists or the designated hat doesn't subscribe to recovery events, the collection is invalid.
+If no recovery hat exists or the designated hat doesn't subscribe to `task.resume`, the collection should be invalid.
 
 ## Validation Rules
 
