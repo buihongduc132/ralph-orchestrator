@@ -53,7 +53,6 @@ Each hat in a collection must conform to:
 <hat_id>:
   name: string              # Human-readable name (required)
   triggers: [string]        # Events that activate this hat (required, non-empty)
-                            # Alias: "subscriptions" is accepted for backwards compatibility
   publishes: [string]       # Events this hat can emit (optional, defaults to [])
   instructions: string      # Custom instructions for this hat (optional)
 ```
@@ -412,36 +411,38 @@ ERROR: Event 'impl.blocked' published by 'implementer' has no subscriber.
 
 ## Validation Bypass
 
-For advanced use cases (testing, experimentation), validation can be bypassed:
+**To be implemented.** For advanced use cases (testing, experimentation), validation can be bypassed with a single flag:
 
 ```yaml
 event_loop:
-  validation:
-    strict: false           # Downgrade errors to warnings
-    allow_orphan_events: true
-    allow_unreachable_hats: true
+  strict_validation: false  # Downgrade errors to warnings (default: true)
 ```
+
+**Rationale (YAGNI):** Granular bypass flags like `allow_orphan_events` and `allow_unreachable_hats` add complexity without clear use cases. A single `strict_validation` toggle is sufficient—users who need to bypass validation likely need to bypass all of it.
 
 **Warning when bypassed:**
 ```
-WARN: Hat collection validation bypassed. Errors downgraded to warnings.
-      This may cause undefined behavior during loop execution.
+WARN: Hat collection validation bypassed (strict_validation: false).
+      Errors downgraded to warnings. This may cause undefined behavior.
 ```
 
 ## Preset Collections
 
-Ralph ships with validated preset collections in the `presets/` directory:
+Ralph ships with preset collections in the `presets/` directory:
 
-| Preset | Purpose | Hats |
-|--------|---------|------|
-| `feature.yml` | Feature development | planner, builder, reviewer |
-| `research.yml` | Code exploration (no changes) | researcher, synthesizer |
-| `docs.yml` | Documentation writing | planner, writer, reviewer |
-| `refactor.yml` | Safe code refactoring | planner, refactorer, verifier |
-| `debug.yml` | Bug investigation | investigator, tester, fixer, verifier |
-| `review.yml` | Code review | reviewer, analyzer |
+| Preset | Purpose | Hats | Terminal Events |
+|--------|---------|------|-----------------|
+| `feature.yml` | Feature development | planner, builder, reviewer | — |
+| `feature-minimal.yml` | Feature dev (auto-derived instructions) | planner, builder, reviewer | — |
+| `research.yml` | Code exploration (no changes) | researcher, synthesizer | `research.question`, `synthesis.complete` |
+| `docs.yml` | Documentation writing | planner, writer, reviewer | — |
+| `refactor.yml` | Safe code refactoring | planner, refactorer, verifier | — |
+| `debug.yml` | Bug investigation | investigator, tester, fixer, verifier | `hypothesis.confirmed`, `fix.blocked`, `fix.failed` |
+| `review.yml` | Code review | reviewer, analyzer | `review.complete` |
+| `deploy.yml` | Deployment workflow | planner, builder, deployer, verifier | — |
+| `gap-analysis.yml` | Spec vs implementation comparison | analyzer, verifier, reporter | — |
 
-Presets are validated at build time. Users can extend presets by merging with local config.
+**Note:** Some presets intentionally have "orphan" events that represent workflow completion or hand-off points. These should be declared as `terminal_events` once that feature is implemented. Until then, these presets rely on the completion promise mechanism.
 
 ## Acceptance Criteria
 
@@ -497,7 +498,7 @@ Presets are validated at build time. Users can extend presets by merging with lo
 
 ### Validation Bypass
 
-- **Given** `validation.strict: false` in config
+- **Given** `strict_validation: false` in config
 - **When** an invalid collection is loaded
 - **Then** errors are downgraded to warnings and loop proceeds
 
@@ -541,7 +542,43 @@ Validation runs at config load time, before any iteration starts. This ensures:
 
 ### Migration Path
 
-Existing configurations that would fail validation:
-1. First release: Warnings only (with deprecation notice)
-2. Second release: Errors by default, `strict: false` available
-3. Third release: Errors only, bypass removed
+Existing configurations that would fail new validation rules:
+1. First release: New validations emit warnings only (with deprecation notice)
+2. Second release: New validations are errors by default, `strict_validation: false` available
+
+## Implementation Status
+
+This section tracks what's currently implemented vs what this spec proposes.
+
+### Currently Implemented (in `config.rs`)
+
+| Validation | Status | Location |
+|------------|--------|----------|
+| Non-empty collection | ✅ Implemented | `preflight_check()` |
+| Entry point exists (`task.start`/`task.resume`) | ✅ Implemented | `preflight_check()` |
+| Unique triggers (no ambiguous routing) | ✅ Implemented | `validate()` |
+| No orphan events (published events have subscribers) | ✅ Implemented | `preflight_check()` |
+| Terminal event exemption for `LOOP_COMPLETE` and `completion_promise` | ✅ Implemented | `preflight_check()` |
+
+### To Be Implemented
+
+| Feature | Priority | Notes |
+|---------|----------|-------|
+| Reachability check (DFS from entry point) | High | Catches unreachable hats |
+| Recovery hat validation (`task.resume` subscription) | Medium | Currently hardcoded to "planner" |
+| Configurable `recovery_hat` field | Medium | Enables custom recovery hats |
+| Configurable `terminal_events` list | Medium | Enables custom terminal events |
+| `strict_validation` bypass flag | Low | For experimentation |
+| Rich error messages with fix suggestions | Low | Improves DX |
+| Exit point validation (completion capability) | Low | May not be worth the complexity |
+
+### Config Fields Not Yet in Schema
+
+These fields are specified but not present in `EventLoopConfig`:
+
+```rust
+// To be added to EventLoopConfig:
+pub terminal_events: Vec<String>,      // Default: []
+pub recovery_hat: Option<String>,      // Default: None (uses "planner")
+pub strict_validation: bool,           // Default: true
+```

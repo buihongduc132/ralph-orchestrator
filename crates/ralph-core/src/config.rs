@@ -841,7 +841,7 @@ pub struct HatConfig {
 
     /// Events that trigger this hat to be worn.
     /// Per spec: "Hats define triggers — which events cause Ralph to wear this hat."
-    #[serde(default, alias = "subscriptions")]
+    #[serde(default)]
     pub triggers: Vec<String>,
 
     /// Topics this hat publishes.
@@ -1025,21 +1025,6 @@ hats:
 
         let hat = config.hats.get("implementer").unwrap();
         assert_eq!(hat.triggers.len(), 2);
-    }
-
-    #[test]
-    fn test_triggers_alias_for_subscriptions() {
-        // Backwards compatibility: "subscriptions" is an alias for "triggers"
-        let yaml = r#"
-hats:
-  builder:
-    name: "Builder"
-    subscriptions: ["build.task"]
-"#;
-        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
-        let hat = config.hats.get("builder").unwrap();
-        assert_eq!(hat.triggers.len(), 1);
-        assert_eq!(hat.triggers[0], "build.task");
     }
 
     #[test]
