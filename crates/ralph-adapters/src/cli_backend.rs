@@ -109,7 +109,7 @@ impl CliBackend {
             command,
             args: config.args.clone(),
             prompt_mode,
-            prompt_flag: config.prompt_flag.clone().or_else(|| Some("-p".to_string())),
+            prompt_flag: config.prompt_flag.clone(),
         }
     }
 
@@ -340,5 +340,56 @@ mod tests {
         assert_eq!(args_auto, vec!["--yolo", "-p", "test prompt"]);
         assert_eq!(stdin_auto, stdin_interactive);
         assert!(stdin_auto.is_none());
+    }
+
+    #[test]
+    fn test_custom_backend_with_prompt_flag_short() {
+        let config = CliConfig {
+            backend: "custom".to_string(),
+            command: Some("my-agent".to_string()),
+            prompt_mode: "arg".to_string(),
+            prompt_flag: Some("-p".to_string()),
+            ..Default::default()
+        };
+        let backend = CliBackend::from_config(&config);
+        let (cmd, args, stdin, _temp) = backend.build_command("test prompt", false);
+
+        assert_eq!(cmd, "my-agent");
+        assert_eq!(args, vec!["-p", "test prompt"]);
+        assert!(stdin.is_none());
+    }
+
+    #[test]
+    fn test_custom_backend_with_prompt_flag_long() {
+        let config = CliConfig {
+            backend: "custom".to_string(),
+            command: Some("my-agent".to_string()),
+            prompt_mode: "arg".to_string(),
+            prompt_flag: Some("--prompt".to_string()),
+            ..Default::default()
+        };
+        let backend = CliBackend::from_config(&config);
+        let (cmd, args, stdin, _temp) = backend.build_command("test prompt", false);
+
+        assert_eq!(cmd, "my-agent");
+        assert_eq!(args, vec!["--prompt", "test prompt"]);
+        assert!(stdin.is_none());
+    }
+
+    #[test]
+    fn test_custom_backend_without_prompt_flag_positional() {
+        let config = CliConfig {
+            backend: "custom".to_string(),
+            command: Some("my-agent".to_string()),
+            prompt_mode: "arg".to_string(),
+            prompt_flag: None,
+            ..Default::default()
+        };
+        let backend = CliBackend::from_config(&config);
+        let (cmd, args, stdin, _temp) = backend.build_command("test prompt", false);
+
+        assert_eq!(cmd, "my-agent");
+        assert_eq!(args, vec!["test prompt"]);
+        assert!(stdin.is_none());
     }
 }
