@@ -290,26 +290,19 @@ impl EventLoop {
     /// Injects a fallback event to recover from a stalled loop.
     ///
     /// When no hats have pending events (agent failed to publish), this method
-    /// injects a `task.resume` event to trigger the planner with built-in
-    /// instructions to attempt recovery.
+    /// injects a `task.resume` event which Ralph will handle to attempt recovery.
     ///
     /// Returns true if a fallback event was injected, false if recovery is not possible.
     pub fn inject_fallback_event(&mut self) -> bool {
-        // Only inject fallback if planner hat exists and can be triggered by task.resume
-        let planner_id = HatId::new("planner");
-        if let Some(hat) = self.registry.get(&planner_id) {
-            if hat.subscriptions.iter().any(|t| t.as_str() == "task.resume") {
-                let fallback_event = Event::new(
-                    "task.resume",
-                    "RECOVERY: Previous iteration did not publish an event. \
-                     Review the scratchpad and either dispatch the next task or complete the loop."
-                );
-                info!("Injecting fallback event to recover - triggering planner with task.resume");
-                self.bus.publish(fallback_event);
-                return true;
-            }
-        }
-        false
+        // Ralph always handles task.resume as the implicit coordinator
+        let fallback_event = Event::new(
+            "task.resume",
+            "RECOVERY: Previous iteration did not publish an event. \
+             Review the scratchpad and either dispatch the next task or complete the loop."
+        );
+        info!("Injecting fallback event to recover - triggering Ralph with task.resume");
+        self.bus.publish(fallback_event);
+        true
     }
 
     /// Builds the prompt for a hat's execution.
@@ -425,9 +418,9 @@ impl EventLoop {
             self.state.consecutive_failures += 1;
         }
 
-        // Check for completion promise - only valid from planner hat
+        // Check for completion promise - only valid from Ralph (the coordinator)
         // Per spec: Requires dual condition (task state + consecutive confirmation)
-        if hat_id.as_str() == "planner"
+        if hat_id.as_str() == "ralph"
             && EventParser::contains_promise(output, &self.config.event_loop.completion_promise)
         {
             // Verify scratchpad task state
@@ -818,8 +811,8 @@ event_loop:
         fs::create_dir_all(scratchpad_path.parent().unwrap()).unwrap();
         fs::write(scratchpad_path, "## Tasks\n- [x] Task 1 done\n- [x] Task 2 done\n").unwrap();
 
-        // Use planner hat since it's the one that outputs completion promise per spec
-        let hat_id = HatId::new("planner");
+        // Use Ralph since it's the coordinator that outputs completion promise
+        let hat_id = HatId::new("ralph");
         
         // First LOOP_COMPLETE - should NOT terminate (needs consecutive confirmation)
         let reason = event_loop.process_output(&hat_id, "Done! LOOP_COMPLETE", true);
@@ -835,7 +828,7 @@ event_loop:
 
     #[test]
     fn test_builder_cannot_terminate_loop() {
-        // Per spec: "Builder hat outputs LOOP_COMPLETE → completion promise is ignored (only Planner can terminate)"
+        // Per spec: "Builder hat outputs LOOP_COMPLETE → completion promise is ignored (only Ralph can terminate)"
         let config = RalphConfig::default();
         let mut event_loop = EventLoop::new(config);
         event_loop.initialize("Test");
@@ -1180,9 +1173,9 @@ hats:
         let mut event_loop = EventLoop::new(config);
         event_loop.initialize("Test task");
 
-        let planner_id = HatId::new("planner");
+        let ralph_id = HatId::new("ralph");
         
-        // Simulate planner output with cancelled task
+        // Simulate Ralph output with cancelled task
         let output = r#"
 ## Tasks
 - [x] Task 1 completed
@@ -1191,7 +1184,7 @@ hats:
 "#;
         
         // Process output - should not terminate since there are still pending tasks
-        let reason = event_loop.process_output(&planner_id, output, true);
+        let reason = event_loop.process_output(&ralph_id, output, true);
         assert_eq!(reason, None, "Should not terminate with pending tasks");
     }
 
@@ -1203,16 +1196,17 @@ hats:
         // Test that cancelled tasks don't block completion when all other tasks are done
         let yaml = r#"
 hats:
-  planner:
-    name: "Planner"
-    triggers: ["task.start", "build.done", "build.blocked"]
-    publishes: ["build.task"]
+  builder:
+    name: "Builder"
+    triggers: ["build.task"]
+    publishes: ["build.done"]
 "#;
         let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
         let mut event_loop = EventLoop::new(config);
         event_loop.initialize("Test task");
 
-        let planner_id = HatId::new("planner");
+        // Ralph handles task.start, not a specific hat
+        let ralph_id = HatId::new("ralph");
         
         // Create scratchpad with completed and cancelled tasks
         let scratchpad_path = Path::new(".agent/scratchpad.md");
@@ -1229,11 +1223,11 @@ hats:
         let output = "All done! LOOP_COMPLETE";
         
         // First confirmation - should not terminate yet
-        let reason = event_loop.process_output(&planner_id, output, true);
+        let reason = event_loop.process_output(&ralph_id, output, true);
         assert_eq!(reason, None, "First confirmation should not terminate");
         
         // Second consecutive confirmation - should complete successfully despite cancelled tasks
-        let reason = event_loop.process_output(&planner_id, output, true);
+        let reason = event_loop.process_output(&ralph_id, output, true);
         assert_eq!(reason, Some(TerminationReason::CompletionPromise), "Should complete with partial completion");
 
         // Cleanup

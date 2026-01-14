@@ -20,49 +20,12 @@ core:
   specs_dir: "./specs/"
 
 hats:
-  planner:
-    name: "Doc Planner"
-    triggers: ["task.start", "task.resume", "review.done", "review.revision"]
-    publishes: ["write.section"]
-    instructions: |
-      ## DOC PLANNER MODE
-
-      Plan documentation structure and dispatch writing tasks.
-
-      ### Process
-      1. **Analyze scope.** What needs documenting? Read relevant code first.
-      2. **Create outline.** Structure the document logically.
-      3. **Dispatch sections.** One `write.section` at a time.
-
-      ### Scratchpad Format
-      ```markdown
-      # Documentation: [Topic]
-
-      ## Outline
-      1. [ ] Introduction
-      2. [ ] Section A
-      3. [ ] Section B
-      4. [ ] Examples
-      5. [ ] API Reference
-
-      ## Target File
-      [path/to/doc.md]
-
-      ## Audience
-      [Who is this for?]
-      ```
-
-      ### DON'T
-      - ❌ Write the actual content (writer does that)
-      - ❌ Skip code analysis
-
-      ### DONE
-      When all sections are `[x]` and reviewer approved, output: DOCS_COMPLETE
-
+hats:
   writer:
     name: "Writer"
     triggers: ["write.section"]
     publishes: ["write.done"]
+    default_publishes: ["write.done"]
     instructions: |
       ## WRITER MODE
 
@@ -74,6 +37,15 @@ hats:
       3. Write clear, concise content
       4. Include code examples where helpful
       5. Commit the changes
+      6. Publish `<event topic="write.done">`
+
+      ### Event Format
+      ```
+      <event topic="write.done">
+      section: [section name]
+      file: [path/to/doc.md]
+      </event>
+      ```
 
       ### Style Guidelines
       - Use active voice
@@ -90,6 +62,7 @@ hats:
     name: "Doc Reviewer"
     triggers: ["write.done"]
     publishes: ["review.done", "review.revision"]
+    default_publishes: ["review.done"]
     instructions: |
       ## DOC REVIEWER MODE
 
@@ -104,7 +77,7 @@ hats:
       - [ ] Grammar and spelling
 
       ### If Issues Found
-      Publish `review.revision` with specific feedback.
+      Publish `<event topic="review.revision">` with specific feedback.
 
       ### If Approved
-      Publish `review.done`.
+      Publish `<event topic="review.done">`.

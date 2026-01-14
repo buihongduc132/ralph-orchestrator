@@ -21,17 +21,11 @@ core:
   specs_dir: "./specs/"
 
 hats:
-  planner:
-    name: "Planner"
-    triggers: ["task.start", "task.resume", "build.done", "build.blocked", "review.approved", "review.changes_requested"]
-    publishes: ["build.task", "review.request"]
-    # No custom instructions - uses built-in planner with derived behaviors from pub/sub contract.
-    # This ensures all safeguards are inherited (prerequisites, no premature termination).
-
   builder:
     name: "Builder"
     triggers: ["build.task"]
     publishes: ["build.done", "build.blocked"]
+    default_publishes: ["build.done"]
     instructions: |
       ## BUILDER MODE
 
@@ -42,7 +36,17 @@ hats:
       2. **Implement.** Write the code. Follow existing patterns.
       3. **Validate.** Run backpressure. Must pass.
       4. **Commit.** One task, one commit.
-      5. **Exit.** Publish `build.done`.
+      5. **Exit.** Publish `<event topic="build.done">` with evidence.
+
+      ### Event Format
+      Write events as JSONL:
+      ```
+      <event topic="build.done">
+      tests: pass
+      lint: pass
+      typecheck: pass
+      </event>
+      ```
 
       ### Backpressure
       ```bash
@@ -56,12 +60,13 @@ hats:
       - ❌ Skip tests
 
       ### STUCK?
-      Publish `build.blocked` with what you tried and why it failed.
+      Publish `<event topic="build.blocked">` with what you tried and why it failed.
 
   reviewer:
     name: "Reviewer"
     triggers: ["review.request"]
     publishes: ["review.approved", "review.changes_requested"]
+    default_publishes: ["review.approved"]
     instructions: |
       ## REVIEWER MODE
 
@@ -75,10 +80,10 @@ hats:
       - [ ] **Security:** Any obvious vulnerabilities?
 
       ### If Approved
-      Publish `review.approved` — planner will mark task done.
+      Publish `<event topic="review.approved">` — Ralph will coordinate next steps.
 
       ### If Changes Needed
-      Publish `review.changes_requested` with specific feedback:
+      Publish `<event topic="review.changes_requested">` with specific feedback:
       ```
       <event topic="review.changes_requested">
       ## Issues

@@ -21,56 +21,11 @@ core:
   specs_dir: "./specs/"
 
 hats:
-  planner:
-    name: "Refactor Planner"
-    triggers: ["task.start", "task.resume", "verify.passed", "refactor.blocked", "verify.failed"]
-    publishes: ["refactor.task"]
-    instructions: |
-      ## REFACTOR PLANNER MODE
-
-      Plan safe, incremental refactoring steps.
-
-      ### Golden Rule
-      **Each step must leave the codebase in a working state.**
-
-      ### Process
-      1. **Understand current state.** Read the code. Run tests. Note current behavior.
-      2. **Define target state.** What should it look like after?
-      3. **Break into atomic steps.** Each step: one logical change, tests still pass.
-      4. **Order by dependency.** What must happen first?
-
-      ### Scratchpad Format
-      ```markdown
-      # Refactor: [Goal]
-
-      ## Current State
-      [Description of current structure]
-
-      ## Target State
-      [Description of desired structure]
-
-      ## Invariants
-      - [ ] Tests pass after each step
-      - [ ] No behavior changes (unless intentional)
-      - [ ] No new warnings
-
-      ## Steps
-      - [ ] Step 1: [atomic change]
-      - [ ] Step 2: [atomic change]
-      ```
-
-      ### DON'T
-      - ❌ Plan large, risky steps
-      - ❌ Combine unrelated changes
-      - ❌ Skip the "test first" baseline
-
-      ### DONE
-      When all steps are `[x]` and tests pass, output: REFACTOR_COMPLETE
-
   refactorer:
     name: "Refactorer"
     triggers: ["refactor.task"]
     publishes: ["refactor.done", "refactor.blocked"]
+    default_publishes: ["refactor.done"]
     instructions: |
       ## REFACTORER MODE
 
@@ -82,6 +37,16 @@ hats:
       3. **Run tests** immediately after
       4. **Run clippy** to catch new warnings
       5. **Commit** with clear message
+      6. **Publish** `<event topic="refactor.done">`
+
+      ### Event Format
+      ```
+      <event topic="refactor.done">
+      step: [step description]
+      tests: pass
+      clippy: pass
+      </event>
+      ```
 
       ### Commit Format
       ```
@@ -93,8 +58,8 @@ hats:
 
       ### If Tests Fail
       - DO NOT commit
-      - Publish `refactor.blocked` with failure details
-      - Planner will adjust the plan
+      - Publish `<event topic="refactor.blocked">` with failure details
+      - Ralph will coordinate next steps
 
       ### DON'T
       - ❌ Make multiple changes at once
@@ -106,6 +71,7 @@ hats:
     name: "Verifier"
     triggers: ["refactor.done"]
     publishes: ["verify.passed", "verify.failed"]
+    default_publishes: ["verify.passed"]
     instructions: |
       ## VERIFIER MODE
 
@@ -118,10 +84,10 @@ hats:
       4. Manual spot-check if tests are sparse
 
       ### If All Pass
-      Publish `verify.passed`
+      Publish `<event topic="verify.passed">`
 
       ### If Any Fail
-      Publish `verify.failed` with details:
+      Publish `<event topic="verify.failed">` with details:
       - Which check failed
       - Error output
       - Suspected cause
