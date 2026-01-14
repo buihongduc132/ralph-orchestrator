@@ -74,7 +74,7 @@ impl Default for PtyConfig {
     fn default() -> Self {
         Self {
             interactive: true,
-            idle_timeout_secs: 30,
+            idle_timeout_secs: 900,
             cols: 80,
             rows: 24,
         }
@@ -155,12 +155,43 @@ impl Default for CtrlCState {
 pub struct PtyExecutor {
     backend: CliBackend,
     config: PtyConfig,
+    // Channel ends for TUI integration
+    output_tx: mpsc::UnboundedSender<Vec<u8>>,
+    output_rx: Option<mpsc::UnboundedReceiver<Vec<u8>>>,
+    input_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
+    input_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    control_tx: Option<mpsc::UnboundedSender<crate::pty_handle::ControlCommand>>,
+    control_rx: mpsc::UnboundedReceiver<crate::pty_handle::ControlCommand>,
 }
 
 impl PtyExecutor {
     /// Creates a new PTY executor with the given backend and configuration.
     pub fn new(backend: CliBackend, config: PtyConfig) -> Self {
-        Self { backend, config }
+        let (output_tx, output_rx) = mpsc::unbounded_channel();
+        let (input_tx, input_rx) = mpsc::unbounded_channel();
+        let (control_tx, control_rx) = mpsc::unbounded_channel();
+        
+        Self {
+            backend,
+            config,
+            output_tx,
+            output_rx: Some(output_rx),
+            input_tx: Some(input_tx),
+            input_rx,
+            control_tx: Some(control_tx),
+            control_rx,
+        }
+    }
+
+    /// Returns a handle for TUI integration.
+    ///
+    /// Can only be called once - panics if called multiple times.
+    pub fn handle(&mut self) -> crate::pty_handle::PtyHandle {
+        crate::pty_handle::PtyHandle {
+            output_rx: self.output_rx.take().expect("handle() already called"),
+            input_tx: self.input_tx.take().expect("handle() already called"),
+            control_tx: self.control_tx.take().expect("handle() already called"),
+        }
     }
 
     /// Spawns Claude in a PTY and returns the PTY pair, child process, stdin input, and temp file.
@@ -195,31 +226,10 @@ impl PtyExecutor {
 
         // Set up environment for PTY
         cmd_builder.env("TERM", "xterm-256color");
-
-        // Log at info level to help debug hangs
-        info!(
-            command = %cmd,
-            args_count = args.len(),
-            prompt_len = prompt.len(),
-            cwd = ?cwd,
-            cols = self.config.cols,
-            rows = self.config.rows,
-            has_temp_file = temp_file.is_some(),
-            has_stdin_input = stdin_input.is_some(),
-            "Spawning process in PTY"
-        );
-        // Show first 100 chars of each arg to help debug
-        for (i, arg) in args.iter().enumerate() {
-            let preview: String = arg.chars().take(100).collect();
-            debug!(arg_index = i, arg_preview = %preview, arg_len = arg.len(), "Command argument");
-        }
-
         let child = pair
             .slave
             .spawn_command(cmd_builder)
             .map_err(|e| io::Error::other(e.to_string()))?;
-
-        info!(pid = ?child.process_id(), "Child process spawned");
 
         // Return stdin_input so callers can write it after taking the writer
         Ok((pair, child, stdin_input, temp_file))
@@ -227,130 +237,205 @@ impl PtyExecutor {
 
     /// Runs in observe mode (output-only, no input forwarding).
     ///
+    /// This is an async function that handles Ctrl+C directly by exiting the process.
+    /// Uses a separate thread for blocking PTY reads and tokio::select! for signal handling.
+    ///
     /// Returns when the process exits or idle timeout triggers.
+    /// On Ctrl+C, exits the entire process with code 130.
     ///
     /// # Errors
     ///
     /// Returns an error if PTY allocation fails, the command cannot be spawned,
     /// or an I/O error occurs during output handling.
-    pub fn run_observe(&self, prompt: &str) -> io::Result<PtyExecutionResult> {
+    pub async fn run_observe(&self, prompt: &str) -> io::Result<PtyExecutionResult> {
         // Keep temp_file alive for the duration of execution (large prompts use temp files)
         let (pair, mut child, stdin_input, _temp_file) = self.spawn_pty(prompt)?;
 
-        let mut reader = pair.master.try_clone_reader()
+        let reader = pair.master.try_clone_reader()
             .map_err(|e| io::Error::other(e.to_string()))?;
 
         // Write stdin input if present (for stdin prompt mode)
         if let Some(ref input) = stdin_input {
             // Small delay to let process initialize
-            std::thread::sleep(Duration::from_millis(100));
+            tokio::time::sleep(Duration::from_millis(100)).await;
             let mut writer = pair.master.take_writer()
                 .map_err(|e| io::Error::other(e.to_string()))?;
             writer.write_all(input.as_bytes())?;
             writer.write_all(b"\n")?;
             writer.flush()?;
-            info!(input_len = input.len(), "Wrote stdin input to PTY (observe mode)");
         }
 
         // Drop the slave to signal EOF when master closes
         drop(pair.slave);
 
         let mut output = Vec::new();
-        let mut buf = [0u8; 4096];
-        let mut last_activity = Instant::now();
-        let timeout = if self.config.idle_timeout_secs > 0 {
+        let timeout_duration = if self.config.idle_timeout_secs > 0 {
             Some(Duration::from_secs(u64::from(self.config.idle_timeout_secs)))
         } else {
             None
         };
 
         let mut termination = TerminationType::Natural;
+        let mut last_activity = Instant::now();
 
-        loop {
-            // Check if child has exited
-            if let Some(status) = child.try_wait()
-                .map_err(|e| io::Error::other(e.to_string()))?
-            {
-                debug!(exit_status = ?status, "Child process exited");
-                // Drain any remaining output
-                loop {
-                    match reader.read(&mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            io::stdout().write_all(&buf[..n])?;
-                            io::stdout().flush()?;
-                            output.extend_from_slice(&buf[..n]);
+        // Flag for termination request (shared with reader thread)
+        let should_terminate = Arc::new(AtomicBool::new(false));
+
+        // Spawn blocking reader thread that sends output via channel
+        let (output_tx, mut output_rx) = mpsc::channel::<OutputEvent>(256);
+        let should_terminate_reader = Arc::clone(&should_terminate);
+        let tui_output_tx = self.output_tx.clone();
+
+        debug!("Spawning PTY output reader thread (observe mode)");
+        std::thread::spawn(move || {
+            let mut reader = reader;
+            let mut buf = [0u8; 4096];
+
+            loop {
+                if should_terminate_reader.load(Ordering::SeqCst) {
+                    debug!("PTY reader: termination requested");
+                    break;
+                }
+
+                match reader.read(&mut buf) {
+                    Ok(0) => {
+                        debug!("PTY reader: EOF");
+                        let _ = output_tx.blocking_send(OutputEvent::Eof);
+                        break;
+                    }
+                    Ok(n) => {
+                        let data = buf[..n].to_vec();
+                        // Send to TUI channel
+                        let _ = tui_output_tx.send(data.clone());
+                        // Send to main loop
+                        if output_tx.blocking_send(OutputEvent::Data(data)).is_err() {
+                            break;
                         }
-                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                        Err(e) => return Err(e),
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                    Err(e) => {
+                        debug!(error = %e, "PTY reader error");
+                        let _ = output_tx.blocking_send(OutputEvent::Error(e.to_string()));
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Main event loop using tokio::select! for interruptibility
+        loop {
+            // Calculate timeout for idle check
+            let idle_timeout = timeout_duration.map(|d| {
+                let elapsed = last_activity.elapsed();
+                if elapsed >= d {
+                    Duration::from_millis(1) // Trigger immediately
+                } else {
+                    d - elapsed
+                }
+            });
+
+            tokio::select! {
+                // Check for Ctrl+C - exit immediately
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Ctrl+C received in observe mode, terminating");
+                    should_terminate.store(true, Ordering::SeqCst);
+                    let _ = self.terminate_child(&mut child, true);
+                    std::process::exit(130); // Standard exit code for SIGINT
+                }
+
+                // Check for output from reader thread
+                event = output_rx.recv() => {
+                    match event {
+                        Some(OutputEvent::Data(data)) => {
+                            // Write to stdout in real-time
+                            io::stdout().write_all(&data)?;
+                            io::stdout().flush()?;
+                            output.extend_from_slice(&data);
+                            last_activity = Instant::now();
+                        }
+                        Some(OutputEvent::Eof) | None => {
+                            debug!("Output channel closed, process likely exited");
+                            break;
+                        }
+                        Some(OutputEvent::Error(e)) => {
+                            debug!(error = %e, "Reader thread reported error");
+                            break;
+                        }
                     }
                 }
 
-                let exit_code = status.exit_code();
-                let success = status.success();
-
-                return Ok(PtyExecutionResult {
-                    output: String::from_utf8_lossy(&output).to_string(),
-                    stripped_output: strip_ansi(&output),
-                    success,
-                    exit_code: Some(exit_code as i32),
-                    termination,
-                });
-            }
-
-            // Check idle timeout
-            if let Some(timeout_duration) = timeout {
-                if last_activity.elapsed() > timeout_duration {
+                // Check for idle timeout
+                _ = async {
+                    if let Some(timeout) = idle_timeout {
+                        tokio::time::sleep(timeout).await;
+                    } else {
+                        // No timeout configured, wait forever
+                        std::future::pending::<()>().await;
+                    }
+                } => {
                     warn!(
                         timeout_secs = self.config.idle_timeout_secs,
                         "Idle timeout triggered"
                     );
                     termination = TerminationType::IdleTimeout;
+                    should_terminate.store(true, Ordering::SeqCst);
                     self.terminate_child(&mut child, true)?;
                     break;
                 }
             }
 
-            // Read output (non-blocking would be ideal, but we use small timeout)
-            // For simplicity, we do blocking reads with a timeout check
-            match reader.read(&mut buf) {
-                Ok(0) => {
-                    // EOF - process likely exited
-                    break;
-                }
-                Ok(n) => {
-                    // Write to stdout in real-time
-                    io::stdout().write_all(&buf[..n])?;
-                    io::stdout().flush()?;
+            // Check if child has exited
+            if let Some(status) = child.try_wait().map_err(|e| io::Error::other(e.to_string()))? {
+                let exit_code = status.exit_code() as i32;
+                debug!(exit_status = ?status, exit_code, "Child process exited");
 
-                    // Accumulate for return
-                    output.extend_from_slice(&buf[..n]);
+                // If child was killed by SIGINT (exit code 130), exit Ralph too
+                // This handles the case where Ctrl+C goes to the PTY foreground process
+                if exit_code == 130 {
+                    info!("Child process killed by SIGINT, exiting Ralph");
+                    std::process::exit(130);
+                }
 
-                    // Reset activity timer
-                    last_activity = Instant::now();
+                // Drain any remaining output from channel
+                while let Ok(event) = output_rx.try_recv() {
+                    if let OutputEvent::Data(data) = event {
+                        io::stdout().write_all(&data)?;
+                        io::stdout().flush()?;
+                        output.extend_from_slice(&data);
+                    }
                 }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    // No data available, sleep briefly
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-                Err(e) => {
-                    // Real error or EOF
-                    debug!(error = %e, "PTY read error");
-                    break;
-                }
+
+                return Ok(PtyExecutionResult {
+                    output: String::from_utf8_lossy(&output).to_string(),
+                    stripped_output: strip_ansi(&output),
+                    success: status.success(),
+                    exit_code: Some(exit_code),
+                    termination,
+                });
             }
         }
 
+        // Signal reader thread to stop
+        should_terminate.store(true, Ordering::SeqCst);
+
         // Wait for child to fully exit
-        let status = child.wait()
-            .map_err(|e| io::Error::other(e.to_string()))?;
+        let status = child.wait().map_err(|e| io::Error::other(e.to_string()))?;
+        let exit_code = status.exit_code() as i32;
+
+        // If child was killed by SIGINT (exit code 130), exit Ralph too
+        if exit_code == 130 {
+            info!("Child process killed by SIGINT, exiting Ralph");
+            std::process::exit(130);
+        }
 
         Ok(PtyExecutionResult {
             output: String::from_utf8_lossy(&output).to_string(),
             stripped_output: strip_ansi(&output),
             success: status.success(),
-            exit_code: Some(status.exit_code() as i32),
+            exit_code: Some(exit_code),
             termination,
         })
     }
@@ -370,7 +455,7 @@ impl PtyExecutor {
     /// Returns an error if PTY allocation fails, the command cannot be spawned,
     /// or an I/O error occurs during bidirectional communication.
     #[allow(clippy::too_many_lines)] // Complex state machine requires cohesive implementation
-    pub async fn run_interactive(&self, prompt: &str) -> io::Result<PtyExecutionResult> {
+    pub async fn run_interactive(&mut self, prompt: &str) -> io::Result<PtyExecutionResult> {
         // Keep temp_file alive for the duration of execution (large prompts use temp files)
         let (pair, mut child, stdin_input, _temp_file) = self.spawn_pty(prompt)?;
 
@@ -402,6 +487,7 @@ impl PtyExecutor {
         // Spawn output reading task (blocking read wrapped in spawn_blocking via channel)
         let (output_tx, mut output_rx) = mpsc::channel::<OutputEvent>(256);
         let should_terminate_output = Arc::clone(&should_terminate);
+        let tui_output_tx = self.output_tx.clone();
 
         debug!("Spawning PTY output reader thread");
         std::thread::spawn(move || {
@@ -425,10 +511,13 @@ impl PtyExecutor {
                     }
                     Ok(n) => {
                         if first_read {
-                            info!("PTY output reader: first data received ({} bytes)", n);
                             first_read = false;
                         }
-                        if output_tx.blocking_send(OutputEvent::Data(buf[..n].to_vec())).is_err() {
+                        let data = buf[..n].to_vec();
+                        // Send to TUI channel
+                        let _ = tui_output_tx.send(data.clone());
+                        // Send to main loop
+                        if output_tx.blocking_send(OutputEvent::Data(data)).is_err() {
                             debug!("PTY output reader: channel closed");
                             break;
                         }
@@ -490,7 +579,6 @@ impl PtyExecutor {
             writer.write_all(input.as_bytes())?;
             writer.write_all(b"\n")?;
             writer.flush()?;
-            info!(input_len = input.len(), "Wrote stdin input to PTY");
             last_activity = Instant::now();
         }
 
@@ -501,7 +589,8 @@ impl PtyExecutor {
             if let Some(status) = child.try_wait()
                 .map_err(|e| io::Error::other(e.to_string()))?
             {
-                debug!(exit_status = ?status, "Child process exited");
+                let exit_code = status.exit_code() as i32;
+                debug!(exit_status = ?status, exit_code, "Child process exited");
 
                 // Drain remaining output from channel
                 while let Ok(event) = output_rx.try_recv() {
@@ -514,11 +603,18 @@ impl PtyExecutor {
 
                 should_terminate.store(true, Ordering::SeqCst);
 
+                // If child was killed by SIGINT (exit code 130), exit Ralph too
+                // This handles the case where Ctrl+C goes to the PTY foreground process
+                if exit_code == 130 {
+                    info!("Child process killed by SIGINT, exiting Ralph");
+                    std::process::exit(130);
+                }
+
                 return Ok(PtyExecutionResult {
                     output: String::from_utf8_lossy(&output).to_string(),
                     stripped_output: strip_ansi(&output),
                     success: status.success(),
-                    exit_code: Some(status.exit_code() as i32),
+                    exit_code: Some(exit_code),
                     termination,
                 });
             }
@@ -546,6 +642,10 @@ impl PtyExecutor {
                             io::stdout().write_all(&data)?;
                             io::stdout().flush()?;
                             output.extend_from_slice(&data);
+                            
+                            // Send to TUI channel if connected
+                            let _ = self.output_tx.send(data);
+                            
                             last_activity = Instant::now();
                         }
                         Some(OutputEvent::Eof) => {
@@ -563,7 +663,7 @@ impl PtyExecutor {
                     }
                 }
 
-                // User input received
+                // User input received (from stdin)
                 input_event = async { input_rx.recv().await } => {
                     match input_event {
                         Some(InputEvent::CtrlC) => {
@@ -603,6 +703,39 @@ impl PtyExecutor {
                     }
                 }
 
+                // TUI input received
+                tui_input = self.input_rx.recv() => {
+                    if let Some(data) = tui_input {
+                        let _ = writer.write_all(&data);
+                        let _ = writer.flush();
+                        last_activity = Instant::now();
+                    }
+                }
+
+                // Control commands from TUI
+                control_cmd = self.control_rx.recv() => {
+                    if let Some(cmd) = control_cmd {
+                        use crate::pty_handle::ControlCommand;
+                        match cmd {
+                            ControlCommand::Kill => {
+                                info!("Control command: Kill");
+                                termination = TerminationType::UserInterrupt;
+                                should_terminate.store(true, Ordering::SeqCst);
+                                self.terminate_child(&mut child, true)?;
+                                break;
+                            }
+                            ControlCommand::Resize(cols, rows) => {
+                                debug!(cols, rows, "Control command: Resize");
+                                // TODO: implement PTY resize
+                            }
+                            ControlCommand::Skip | ControlCommand::Abort => {
+                                // These are handled at orchestrator level, not here
+                                debug!("Control command: {:?} (ignored at PTY level)", cmd);
+                            }
+                        }
+                    }
+                }
+
                 // Idle timeout expired
                 _ = timeout_future => {
                     warn!(
@@ -623,12 +756,19 @@ impl PtyExecutor {
         // Wait for child to fully exit
         let status = child.wait()
             .map_err(|e| io::Error::other(e.to_string()))?;
+        let exit_code = status.exit_code() as i32;
+
+        // If child was killed by SIGINT (exit code 130), exit Ralph too
+        if exit_code == 130 {
+            info!("Child process killed by SIGINT, exiting Ralph");
+            std::process::exit(130);
+        }
 
         Ok(PtyExecutionResult {
             output: String::from_utf8_lossy(&output).to_string(),
             stripped_output: strip_ansi(&output),
             success: status.success(),
-            exit_code: Some(status.exit_code() as i32),
+            exit_code: Some(exit_code),
             termination,
         })
     }

@@ -58,14 +58,15 @@ impl CliBackend {
 
     /// Creates the Claude backend.
     ///
-    /// Uses stdin mode without `-p` flag. This runs Claude in interactive mode
-    /// with full TUI (spinners, tool calls, etc.) visible via PTY.
+    /// Uses `-p` flag for headless/print mode execution. This runs Claude
+    /// in non-interactive mode where it executes the prompt and exits.
+    /// For interactive mode, stdin is used instead (handled in build_command).
     pub fn claude() -> Self {
         Self {
             command: "claude".to_string(),
             args: vec!["--dangerously-skip-permissions".to_string()],
-            prompt_mode: PromptMode::Stdin,
-            prompt_flag: None,
+            prompt_mode: PromptMode::Arg,
+            prompt_flag: Some("-p".to_string()),
         }
     }
 
@@ -205,22 +206,22 @@ mod tests {
         let (cmd, args, stdin, _temp) = backend.build_command("test prompt", false);
 
         assert_eq!(cmd, "claude");
-        assert_eq!(args, vec!["--dangerously-skip-permissions"]);
-        assert_eq!(stdin, Some("test prompt".to_string()));
+        assert_eq!(args, vec!["--dangerously-skip-permissions", "-p", "test prompt"]);
+        assert!(stdin.is_none()); // Uses -p flag, not stdin
     }
 
     #[test]
-    fn test_claude_stdin_mode_handles_large_prompts() {
-        // With stdin mode, large prompts are passed directly via stdin
-        // (no temp file needed since we're not using command line args)
+    fn test_claude_large_prompt_uses_temp_file() {
+        // With -p mode, large prompts (>7000 chars) use temp file to avoid CLI issues
         let backend = CliBackend::claude();
         let large_prompt = "x".repeat(7001);
-        let (cmd, args, stdin, temp) = backend.build_command(&large_prompt, false);
+        let (cmd, args, _stdin, temp) = backend.build_command(&large_prompt, false);
 
         assert_eq!(cmd, "claude");
-        assert_eq!(args, vec!["--dangerously-skip-permissions"]);
-        assert_eq!(stdin, Some(large_prompt));
-        assert!(temp.is_none()); // No temp file needed for stdin mode
+        // Should have temp file for large prompts
+        assert!(temp.is_some());
+        // Args should contain instruction to read from temp file
+        assert!(args.iter().any(|a| a.contains("Please read and execute")));
     }
 
     #[test]
@@ -280,17 +281,18 @@ mod tests {
 
     #[test]
     fn test_from_config() {
-        // Claude backend uses stdin mode by default
+        // Claude backend uses -p arg mode for headless execution
         let config = CliConfig {
             backend: "claude".to_string(),
             command: None,
-            prompt_mode: "stdin".to_string(),
+            prompt_mode: "arg".to_string(),
             ..Default::default()
         };
         let backend = CliBackend::from_config(&config).unwrap();
 
         assert_eq!(backend.command, "claude");
-        assert_eq!(backend.prompt_mode, PromptMode::Stdin);
+        assert_eq!(backend.prompt_mode, PromptMode::Arg);
+        assert_eq!(backend.prompt_flag, Some("-p".to_string()));
     }
 
     #[test]
@@ -334,10 +336,10 @@ mod tests {
 
         assert_eq!(cmd, "claude");
         assert_eq!(args_auto, args_interactive);
-        assert_eq!(args_auto, vec!["--dangerously-skip-permissions"]);
-        // Stdin mode is used for both auto and interactive
-        assert_eq!(stdin_auto, Some("test prompt".to_string()));
-        assert_eq!(stdin_interactive, Some("test prompt".to_string()));
+        assert_eq!(args_auto, vec!["--dangerously-skip-permissions", "-p", "test prompt"]);
+        // -p mode is used for both auto and interactive
+        assert!(stdin_auto.is_none());
+        assert!(stdin_interactive.is_none());
     }
 
     #[test]

@@ -15,7 +15,8 @@ fn test_resume_requires_existing_scratchpad() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path();
     
-    // Create a basic config file
+    // Create a basic config file with custom backend that will fail fast
+    // Using "nonexistent_backend" ensures auto-detection fails immediately
     let config_content = r#"
 event_loop:
   prompt_file: "PROMPT.md"
@@ -24,7 +25,8 @@ event_loop:
   max_runtime_seconds: 30
 
 cli:
-  backend: "auto"
+  backend: "custom"
+  command: "true"
 
 core:
   scratchpad: ".agent/scratchpad.md"
@@ -62,7 +64,7 @@ fn test_resume_with_existing_scratchpad() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path();
     
-    // Create a basic config file with short timeout to avoid long waits
+    // Create a basic config file with short timeout and fast backend
     let config_content = r#"
 event_loop:
   prompt_file: "PROMPT.md"
@@ -71,32 +73,33 @@ event_loop:
   max_runtime_seconds: 5
 
 cli:
-  backend: "auto"
+  backend: "custom"
+  command: "true"
 
 core:
   scratchpad: ".agent/scratchpad.md"
 "#;
     fs::write(temp_path.join("ralph.yml"), config_content)?;
-    
+
     // Create a prompt file
     fs::write(temp_path.join("PROMPT.md"), "Test task")?;
-    
+
     // Create the .agent directory and scratchpad file
     let agent_dir = temp_path.join(".agent");
     fs::create_dir_all(&agent_dir)?;
-    
+
     let scratchpad_content = r#"# Task List
 
 ## Current Tasks
 - [ ] Implement feature A
-- [x] Complete feature B  
+- [x] Complete feature B
 - [ ] Add tests for feature C
 
 ## Notes
 Previous work completed on feature B.
 "#;
     fs::write(agent_dir.join("scratchpad.md"), scratchpad_content)?;
-    
+
     // Run ralph resume
     let output = Command::new(env!("CARGO_BIN_EXE_ralph"))
         .arg("resume")
@@ -104,13 +107,13 @@ Previous work completed on feature B.
         .arg(temp_path.join("ralph.yml"))
         .current_dir(temp_path)
         .output()?;
-    
+
     let _stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
-    // Should find the existing scratchpad (logged to stdout)
+
+    // Should find the existing scratchpad (logged via tracing to stdout)
     assert!(stdout.contains("Found existing scratchpad"));
-    
+
     Ok(())
 }
 
@@ -118,8 +121,8 @@ Previous work completed on feature B.
 fn test_resume_publishes_task_resume_event() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path();
-    
-    // Create config with short timeout
+
+    // Create config with short timeout and fast backend
     let config_content = r#"
 event_loop:
   prompt_file: "PROMPT.md"
@@ -128,7 +131,8 @@ event_loop:
   max_runtime_seconds: 5
 
 cli:
-  backend: "auto"
+  backend: "custom"
+  command: "true"
 
 core:
   scratchpad: ".agent/scratchpad.md"
@@ -181,8 +185,8 @@ This is a resumed session.
 fn test_resume_vs_run_event_difference() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path();
-    
-    // Create config with short timeout
+
+    // Create config with short timeout and fast backend
     let config_content = r#"
 event_loop:
   prompt_file: "PROMPT.md"
@@ -191,7 +195,8 @@ event_loop:
   max_runtime_seconds: 5
 
 cli:
-  backend: "auto"
+  backend: "custom"
+  command: "true"
 
 core:
   scratchpad: ".agent/scratchpad.md"
@@ -270,8 +275,8 @@ core:
 fn test_resume_logs_scratchpad_found() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path();
-    
-    // Create config with short timeout
+
+    // Create config with short timeout and fast backend
     let config_content = r#"
 event_loop:
   prompt_file: "PROMPT.md"
@@ -280,21 +285,22 @@ event_loop:
   max_runtime_seconds: 5
 
 cli:
-  backend: "auto"
+  backend: "custom"
+  command: "true"
 
 core:
   scratchpad: ".agent/scratchpad.md"
 "#;
-    
+
     fs::write(temp_path.join("ralph.yml"), config_content)?;
-    
+
     // Create a prompt file
     fs::write(temp_path.join("PROMPT.md"), "Test task")?;
-    
+
     // Create the .agent directory and scratchpad with unique content
     let agent_dir = temp_path.join(".agent");
     fs::create_dir_all(&agent_dir)?;
-    
+
     let scratchpad_content = r#"# Existing Task List
 
 ## Current Tasks
@@ -305,7 +311,7 @@ core:
 This scratchpad contains UNIQUE_CONTENT_MARKER for testing.
 "#;
     fs::write(agent_dir.join("scratchpad.md"), scratchpad_content)?;
-    
+
     // Run ralph resume
     let output = Command::new(env!("CARGO_BIN_EXE_ralph"))
         .arg("resume")
@@ -313,12 +319,12 @@ This scratchpad contains UNIQUE_CONTENT_MARKER for testing.
         .arg(temp_path.join("ralph.yml"))
         .current_dir(temp_path)
         .output()?;
-    
+
     let _stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
-    // Should log that it found the existing scratchpad
+
+    // Should log that it found the existing scratchpad (logged via tracing to stdout)
     assert!(stdout.contains("Found existing scratchpad"));
-    
+
     Ok(())
 }

@@ -73,17 +73,9 @@ pub struct RalphConfig {
     #[serde(default)]
     pub max_cost: Option<f64>,
 
-    /// V1 field: Iterations between git checkpoints (maps to event_loop.checkpoint_interval).
-    #[serde(default)]
-    pub checkpoint_interval: Option<u32>,
-
     // ─────────────────────────────────────────────────────────────────────────
     // FEATURE FLAGS
     // ─────────────────────────────────────────────────────────────────────────
-
-    /// Enable git checkpointing.
-    #[serde(default = "default_true")]
-    pub git_checkpoint: bool,
 
     /// Enable verbose output.
     #[serde(default)]
@@ -146,9 +138,7 @@ impl Default for RalphConfig {
             max_iterations: None,
             max_runtime: None,
             max_cost: None,
-            checkpoint_interval: None,
             // Feature flags
-            git_checkpoint: true,
             verbose: false,
             archive_prompts: false,
             enable_metrics: false,
@@ -283,13 +273,6 @@ impl RalphConfig {
             normalized_count += 1;
         }
 
-        // Map v1 `checkpoint_interval` to v2 `event_loop.checkpoint_interval`
-        if let Some(ci) = self.checkpoint_interval {
-            debug!(from = "checkpoint_interval", to = "event_loop.checkpoint_interval", value = ci, "Normalizing v1 field");
-            self.event_loop.checkpoint_interval = ci;
-            normalized_count += 1;
-        }
-
         if normalized_count > 0 {
             debug!(fields_normalized = normalized_count, "V1 to V2 config normalization complete");
         }
@@ -399,7 +382,6 @@ impl RalphConfig {
     /// This validates:
     /// - Event flow graph integrity (no dead-end events)
     /// - Path existence (scratchpad parent dir, specs dir)
-    /// - Git availability (if checkpointing enabled)
     ///
     /// Returns a list of errors (fatal) and warnings (informational).
     pub fn preflight_check(&self) -> (Vec<PreflightError>, Vec<PreflightWarning>) {
@@ -464,14 +446,7 @@ impl RalphConfig {
             }
         }
 
-        // Check 4: Git availability (if checkpointing enabled)
-        if self.git_checkpoint && self.event_loop.checkpoint_interval > 0 {
-            if !Self::is_git_available() {
-                errors.push(PreflightError::GitNotAvailable);
-            }
-        }
-
-        // Check 5: Path validation
+        // Check 4: Path validation
         // Scratchpad parent directory should exist (or be creatable)
         let scratchpad_path = Path::new(&self.core.scratchpad);
         if let Some(parent) = scratchpad_path.parent() {
@@ -536,15 +511,6 @@ impl RalphConfig {
         }
 
         (errors, warnings)
-    }
-
-    /// Helper to check if git is available in PATH.
-    fn is_git_available() -> bool {
-        std::process::Command::new("git")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
     }
 
     /// Returns effective hat configurations, using defaults if none configured.
@@ -649,10 +615,6 @@ pub struct EventLoopConfig {
     #[serde(default = "default_max_failures")]
     pub max_consecutive_failures: u32,
 
-    /// Create checkpoint commit every N iterations.
-    #[serde(default = "default_checkpoint_interval")]
-    pub checkpoint_interval: u32,
-
     /// Starting hat for multi-hat mode.
     pub starting_hat: Option<String>,
 }
@@ -677,10 +639,6 @@ fn default_max_failures() -> u32 {
     5
 }
 
-fn default_checkpoint_interval() -> u32 {
-    5
-}
-
 impl Default for EventLoopConfig {
     fn default() -> Self {
         Self {
@@ -691,7 +649,6 @@ impl Default for EventLoopConfig {
             max_runtime_seconds: default_max_runtime(),
             max_cost_usd: None,
             max_consecutive_failures: default_max_failures(),
-            checkpoint_interval: default_checkpoint_interval(),
             starting_hat: None,
         }
     }
@@ -972,8 +929,6 @@ pub enum PreflightError {
     NoInitialHandler {
         event: String,
     },
-    /// Git is required for checkpointing but not available.
-    GitNotAvailable,
     /// A required path doesn't exist.
     PathNotFound {
         path: String,
@@ -997,9 +952,6 @@ impl std::fmt::Display for PreflightError {
             }
             PreflightError::NoInitialHandler { event } => {
                 write!(f, "Initial event '{event}' has no handler. No hat is subscribed to receive it.")
-            }
-            PreflightError::GitNotAvailable => {
-                write!(f, "Git checkpointing is enabled but 'git' command not found in PATH.")
             }
             PreflightError::PathNotFound { path, purpose } => {
                 write!(f, "Required path not found: '{path}' ({purpose})")
@@ -1064,7 +1016,6 @@ mod tests {
         // Default config has no custom hats (uses default planner+builder)
         assert!(config.hats.is_empty());
         assert_eq!(config.event_loop.max_iterations, 100);
-        assert!(config.git_checkpoint);
         assert!(!config.verbose);
     }
 
@@ -1103,8 +1054,6 @@ completion_promise: "RALPH_DONE"
 max_iterations: 75
 max_runtime: 7200
 max_cost: 10.0
-checkpoint_interval: 10
-git_checkpoint: true
 verbose: true
 "#;
         let mut config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
@@ -1123,8 +1072,6 @@ verbose: true
         assert_eq!(config.event_loop.max_iterations, 75);
         assert_eq!(config.event_loop.max_runtime_seconds, 7200);
         assert_eq!(config.event_loop.max_cost_usd, Some(10.0));
-        assert_eq!(config.event_loop.checkpoint_interval, 10);
-        assert!(config.git_checkpoint);
         assert!(config.verbose);
     }
 

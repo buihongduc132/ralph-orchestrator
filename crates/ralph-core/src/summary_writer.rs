@@ -221,7 +221,6 @@ mod tests {
             cumulative_cost: 1.50,
             started_at: Instant::now(),
             last_hat: None,
-            checkpoint_count: 2,
             consecutive_blocked: 0,
             last_blocked_hat: None,
             task_block_counts: std::collections::HashMap::new(),

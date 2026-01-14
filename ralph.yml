@@ -15,7 +15,6 @@ prompt_file: PROMPT.md         # Path to prompt file
 completion_promise: "LOOP_COMPLETE"
 max_iterations: 100            # Maximum iterations before stopping
 max_runtime: 14400             # Maximum runtime in seconds (4 hours)
-checkpoint_interval: 5         # Git checkpoint every N iterations
 retry_delay: 2                 # Delay between retries in seconds
 
 # Resource limits
@@ -26,7 +25,6 @@ context_threshold: 0.8        # Trigger summarization at 80% of context
 
 # Features
 archive_prompts: true         # Archive prompt history
-git_checkpoint: true          # Enable git checkpointing
 enable_metrics: true          # Enable metrics collection
 verbose: false                # Enable verbose output
 dry_run: false                # Test mode without execution

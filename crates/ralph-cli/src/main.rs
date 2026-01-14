@@ -380,7 +380,6 @@ async fn run_command(
         println!("  Max iterations: {}", config.event_loop.max_iterations);
         println!("  Max runtime: {}s", config.event_loop.max_runtime_seconds);
         println!("  Backend: {}", config.cli.backend);
-        println!("  Git checkpoint: {}", config.git_checkpoint);
         println!("  Verbose: {}", config.verbose);
         // Execution mode info
         println!("  Default mode: {}", config.cli.default_mode);
@@ -900,29 +899,7 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
         event_loop.initialize(&prompt_content);
     }
 
-    // Set up TUI if enabled
-    let tui_handle = if enable_tui {
-        let mut tui = Tui::new();
-        
-        // Parse and apply TUI prefix key configuration
-        match config.tui.parse_prefix() {
-            Ok((key_code, key_modifiers)) => {
-                tui = tui.with_prefix(key_code, key_modifiers);
-            }
-            Err(e) => {
-                error!("Invalid TUI prefix_key configuration: {}", e);
-                return Err(anyhow::anyhow!("Invalid TUI prefix_key: {}", e));
-            }
-        }
-        
-        let observer = tui.observer();
-        event_loop.set_observer(observer);
-        Some(tokio::spawn(async move { tui.run().await }))
-    } else {
-        None
-    };
-
-    // Per spec: Log startup message with registered hats
+    // Log startup message with registered hats
     let hat_names: Vec<String> = event_loop.registry().ids().map(|id| id.to_string()).collect();
     info!(
         hats = ?hat_names,
@@ -949,6 +926,47 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
     let backend = CliBackend::from_config(&config.cli)
         .map_err(|e| anyhow::Error::new(e))?;
 
+    // Create PTY executor if using interactive mode
+    let mut pty_executor = if use_interactive {
+        let pty_config = PtyConfig {
+            interactive: true,
+            idle_timeout_secs: config.cli.idle_timeout_secs,
+            ..PtyConfig::from_env()
+        };
+        Some(PtyExecutor::new(backend.clone(), pty_config))
+    } else {
+        None
+    };
+
+    // Wire TUI to PTY executor if both are enabled
+    let enable_tui = enable_tui && pty_executor.is_some();
+    let tui_handle = if enable_tui {
+        let mut tui = Tui::new();
+        
+        // Parse and apply TUI prefix key configuration
+        match config.tui.parse_prefix() {
+            Ok((key_code, key_modifiers)) => {
+                tui = tui.with_prefix(key_code, key_modifiers);
+            }
+            Err(e) => {
+                error!("Invalid TUI prefix_key configuration: {}", e);
+                return Err(anyhow::anyhow!("Invalid TUI prefix_key: {}", e));
+            }
+        }
+        
+        // Wire PTY handle to TUI
+        if let Some(ref mut executor) = pty_executor {
+            let pty_handle = executor.handle();
+            tui = tui.with_pty(pty_handle);
+        }
+        
+        let observer = tui.observer();
+        event_loop.set_observer(observer);
+        Some(tokio::spawn(async move { tui.run().await }))
+    } else {
+        None
+    };
+
     // Log execution mode - hat info already logged by initialize()
     let exec_mode = if use_interactive { "interactive" } else { "autonomous" };
     debug!(execution_mode = %exec_mode, "Execution mode configured");
@@ -960,8 +978,8 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
     let mut consecutive_fallbacks: u32 = 0;
     const MAX_FALLBACK_ATTEMPTS: u32 = 3;
 
-    // Helper closure to handle termination (writes summary, prints status, creates final checkpoint)
-    let handle_termination = |reason: &TerminationReason, state: &ralph_core::LoopState, git_checkpoint: bool, scratchpad: &str| {
+    // Helper closure to handle termination (writes summary, prints status)
+    let handle_termination = |reason: &TerminationReason, state: &ralph_core::LoopState, scratchpad: &str| {
         // Per spec: Write summary file on termination
         let summary_writer = SummaryWriter::default();
         let scratchpad_path = std::path::Path::new(scratchpad);
@@ -972,13 +990,6 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
 
         if let Err(e) = summary_writer.write(reason, state, scratchpad_opt, final_commit.as_deref()) {
             warn!("Failed to write summary file: {}", e);
-        }
-
-        // Per spec: Create final checkpoint if pending changes exist
-        if git_checkpoint {
-            if let Ok(true) = create_final_checkpoint() {
-                debug!("Final checkpoint created on termination");
-            }
         }
 
         // Print termination info to console
@@ -999,7 +1010,7 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
             // Per spec: Publish loop.terminate event to observers
             let terminate_event = event_loop.publish_terminate_event(&reason);
             log_terminate_event(&mut event_logger, event_loop.state().iteration, &terminate_event);
-            handle_termination(&reason, event_loop.state(), config.git_checkpoint, &config.core.scratchpad);
+            handle_termination(&reason, event_loop.state(), &config.core.scratchpad);
             cleanup_tui(tui_handle);
             return Ok(reason);
         }
@@ -1025,7 +1036,7 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
                     let reason = TerminationReason::Stopped;
                     let terminate_event = event_loop.publish_terminate_event(&reason);
                     log_terminate_event(&mut event_logger, event_loop.state().iteration, &terminate_event);
-                    handle_termination(&reason, event_loop.state(), config.git_checkpoint, &config.core.scratchpad);
+                    handle_termination(&reason, event_loop.state(), &config.core.scratchpad);
                     cleanup_tui(tui_handle);
                     return Ok(reason);
                 }
@@ -1045,7 +1056,7 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
                 // Per spec: Publish loop.terminate event to observers
                 let terminate_event = event_loop.publish_terminate_event(&reason);
                 log_terminate_event(&mut event_logger, event_loop.state().iteration, &terminate_event);
-                handle_termination(&reason, event_loop.state(), config.git_checkpoint, &config.core.scratchpad);
+                handle_termination(&reason, event_loop.state(), &config.core.scratchpad);
                 cleanup_tui(tui_handle);
                 return Ok(reason);
             }
@@ -1089,7 +1100,7 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
         let mut interrupt_rx_clone = interrupt_rx.clone();
         let execute_future = async {
             if use_interactive {
-                execute_pty(&backend, &config, &prompt, use_interactive).await
+                execute_pty(pty_executor.as_mut(), &backend, &config, &prompt, use_interactive).await
             } else {
                 let executor = CliExecutor::new(backend.clone());
                 let result = executor.execute(&prompt, stdout(), timeout).await?;
@@ -1117,7 +1128,7 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
                 let reason = TerminationReason::Interrupted;
                 let terminate_event = event_loop.publish_terminate_event(&reason);
                 log_terminate_event(&mut event_logger, event_loop.state().iteration, &terminate_event);
-                handle_termination(&reason, event_loop.state(), config.git_checkpoint, &config.core.scratchpad);
+                handle_termination(&reason, event_loop.state(), &config.core.scratchpad);
                 cleanup_tui(tui_handle);
                 return Ok(reason);
             }
@@ -1135,7 +1146,7 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
             // Per spec: Publish loop.terminate event to observers
             let terminate_event = event_loop.publish_terminate_event(&reason);
             log_terminate_event(&mut event_logger, event_loop.state().iteration, &terminate_event);
-            handle_termination(&reason, event_loop.state(), config.git_checkpoint, &config.core.scratchpad);
+            handle_termination(&reason, event_loop.state(), &config.core.scratchpad);
             cleanup_tui(tui_handle);
             return Ok(reason);
         }
@@ -1154,13 +1165,6 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
             );
         }
 
-        // Handle checkpointing (only if git_checkpoint is enabled)
-        if config.git_checkpoint && event_loop.should_checkpoint() {
-            if create_checkpoint(event_loop.state().iteration)? {
-                event_loop.record_checkpoint();
-            }
-        }
-
         // Note: Interrupt handling moved into tokio::select! above for immediate termination
     }
 }
@@ -1173,6 +1177,7 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
 /// * `prompt` - The prompt to execute
 /// * `interactive` - The actual execution mode (may differ from config's `default_mode`)
 async fn execute_pty(
+    executor: Option<&mut PtyExecutor>,
     backend: &CliBackend,
     config: &RalphConfig,
     prompt: &str,
@@ -1180,15 +1185,19 @@ async fn execute_pty(
 ) -> Result<(String, bool)> {
     use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
-    // Create PTY config with the actual execution mode
-    // Per interactive-mode.spec.md: "Agent flags are determined by execution mode, not config default"
-    let pty_config = PtyConfig {
-        interactive,
-        idle_timeout_secs: config.cli.idle_timeout_secs,
-        ..PtyConfig::from_env()
+    // Use provided executor or create a new one
+    let mut temp_executor;
+    let exec = if let Some(e) = executor {
+        e
+    } else {
+        let pty_config = PtyConfig {
+            interactive,
+            idle_timeout_secs: config.cli.idle_timeout_secs,
+            ..PtyConfig::from_env()
+        };
+        temp_executor = PtyExecutor::new(backend.clone(), pty_config);
+        &mut temp_executor
     };
-
-    let executor = PtyExecutor::new(backend.clone(), pty_config);
 
     // Enter raw mode for interactive mode to capture keystrokes
     if interactive {
@@ -1203,10 +1212,11 @@ async fn execute_pty(
     });
 
     // Run PTY executor
+    // Note: run_observe handles Ctrl+C internally and exits the process directly
     let result = if interactive {
-        executor.run_interactive(prompt).await
+        exec.run_interactive(prompt).await
     } else {
-        executor.run_observe(prompt)
+        exec.run_observe(prompt).await
     };
 
     match result {
@@ -1293,12 +1303,6 @@ fn print_termination(reason: &TerminationReason, state: &ralph_core::LoopState, 
             "{BOLD}│{RESET}   Elapsed:     {CYAN}{:.1}s{RESET}",
             state.elapsed().as_secs_f64()
         );
-        if state.checkpoint_count > 0 {
-            println!(
-                "{BOLD}│{RESET}   Checkpoints: {CYAN}{}{RESET}",
-                state.checkpoint_count
-            );
-        }
         if state.cumulative_cost > 0.0 {
             println!(
                 "{BOLD}│{RESET}   Cost:        {CYAN}${:.2}{RESET}",
@@ -1312,85 +1316,11 @@ fn print_termination(reason: &TerminationReason, state: &ralph_core::LoopState, 
         println!("+{}+", "-".repeat(58));
         println!("|   Iterations:  {}", state.iteration);
         println!("|   Elapsed:     {:.1}s", state.elapsed().as_secs_f64());
-        if state.checkpoint_count > 0 {
-            println!("|   Checkpoints: {}", state.checkpoint_count);
-        }
         if state.cumulative_cost > 0.0 {
             println!("|   Cost:        ${:.2}", state.cumulative_cost);
         }
         println!("+{}+", "-".repeat(58));
     }
-}
-
-/// Creates a git checkpoint and returns true if the commit succeeded.
-fn create_checkpoint(iteration: u32) -> Result<bool> {
-    info!("Creating checkpoint at iteration {}", iteration);
-
-    let status = Command::new("git")
-        .args(["add", "-A"])
-        .status()
-        .context("Failed to run git add")?;
-
-    if !status.success() {
-        warn!("git add failed");
-        return Ok(false);
-    }
-
-    let message = format!("ralph: checkpoint at iteration {iteration}");
-    let status = Command::new("git")
-        .args(["commit", "-m", &message, "--allow-empty"])
-        .status()
-        .context("Failed to run git commit")?;
-
-    if !status.success() {
-        warn!("git commit failed (may be nothing to commit)");
-        return Ok(false);
-    }
-
-    Ok(true)
-}
-
-/// Creates a final git checkpoint on loop termination if there are pending changes.
-///
-/// Per spec: "Given loop terminates with pending changes, When termination flow executes,
-/// Then final git checkpoint is created before exit."
-fn create_final_checkpoint() -> Result<bool> {
-    // Check if there are pending changes
-    let output = Command::new("git")
-        .args(["status", "--porcelain"])
-        .output()
-        .context("Failed to run git status")?;
-
-    let has_changes = !output.stdout.is_empty();
-
-    if !has_changes {
-        debug!("No pending changes for final checkpoint");
-        return Ok(false);
-    }
-
-    info!("Creating final checkpoint on termination");
-
-    let status = Command::new("git")
-        .args(["add", "-A"])
-        .status()
-        .context("Failed to run git add")?;
-
-    if !status.success() {
-        warn!("git add failed for final checkpoint");
-        return Ok(false);
-    }
-
-    let status = Command::new("git")
-        .args(["commit", "-m", "ralph: final checkpoint on termination"])
-        .status()
-        .context("Failed to run git commit")?;
-
-    if !status.success() {
-        warn!("git commit failed for final checkpoint");
-        return Ok(false);
-    }
-
-    Ok(true)
 }
 
 /// Gets the last commit info (short SHA and subject) for the summary file.

@@ -353,8 +353,6 @@ async fn run_task_loop(
     config.event_loop.max_iterations = task.max_iterations;
     config.event_loop.completion_promise = task.completion_promise.clone();
     config.event_loop.max_runtime_seconds = task.timeout_seconds;
-    // Disable git checkpointing for benchmarks (workspace has isolated git)
-    config.git_checkpoint = false;
 
     // Auto-detect backend
     let priority = config.get_agent_priority();

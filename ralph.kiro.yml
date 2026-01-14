@@ -7,7 +7,6 @@ event_loop:
   max_iterations: 100
   max_runtime_seconds: 14400      # 4 hours
   max_consecutive_failures: 5
-  checkpoint_interval: 5
 
 # CLI backend settings
 cli:
@@ -59,5 +58,4 @@ adapters:
     timeout: 900              # 15 minutes for CLI execution
 
 # Feature flags
-git_checkpoint: true
 verbose: false

@@ -565,7 +565,6 @@ Before the loop starts, the orchestrator runs preflight checks to catch configur
 | `NoHatsConfigured` | No hats defined - loop has nothing to execute |
 | `UnhandledEvent` | A published event has no subscriber (dead end) |
 | `NoInitialHandler` | No hat triggers on `task.start` |
-| `GitNotAvailable` | Git checkpointing enabled but `git` not in PATH |
 | `PathNotFound` | Required path (scratchpad parent) doesn't exist |
 
 ### Preflight Warnings (Informational)
@@ -995,10 +994,6 @@ The orchestrator owns all spawned CLI processes and must ensure no orphaned proc
 - **Given** config where no hat triggers on `task.start`
 - **When** preflight check runs
 - **Then** error is returned with "NoInitialHandler"
-
-- **Given** git checkpointing enabled but `git` not in PATH
-- **When** preflight check runs
-- **Then** error is returned with "GitNotAvailable"
 
 - **Given** preflight errors exist
 - **When** `ralph run` is executed

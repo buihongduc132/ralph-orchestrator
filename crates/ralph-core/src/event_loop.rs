@@ -84,8 +84,6 @@ pub struct LoopState {
     pub started_at: Instant,
     /// The last hat that executed.
     pub last_hat: Option<HatId>,
-    /// Number of git checkpoints created.
-    pub checkpoint_count: u32,
     /// Consecutive blocked events from the same hat.
     pub consecutive_blocked: u32,
     /// Hat that emitted the last blocked event.
@@ -108,7 +106,6 @@ impl Default for LoopState {
             cumulative_cost: 0.0,
             started_at: Instant::now(),
             last_hat: None,
-            checkpoint_count: 0,
             consecutive_blocked: 0,
             last_blocked_hat: None,
             task_block_counts: HashMap::new(),
@@ -238,16 +235,6 @@ impl EventLoop {
         // Per spec: Log hat list, not "mode" terminology
         // ✅ "Ralph ready with hats: planner, builder"
         // ❌ "Starting in multi-hat mode"
-        let hat_names: Vec<_> = self.registry.all().map(|h| h.id.as_str()).collect();
-        let action = if topic == "task.resume" { "Resuming" } else { "Let's do this" };
-        info!(
-            hats = ?hat_names,
-            max_iterations = %self.config.event_loop.max_iterations,
-            "I'm Ralph. Got my hats ready: {}. {}.",
-            hat_names.join(", "),
-            action
-        );
-
         let start_event = Event::new(topic, prompt_content);
         self.bus.publish(start_event);
         debug!(topic = topic, "Published {} event", topic);
@@ -575,25 +562,9 @@ impl EventLoop {
             .to_string()
     }
 
-    /// Returns true if a checkpoint should be created at this iteration.
-    pub fn should_checkpoint(&self) -> bool {
-        let interval = self.config.event_loop.checkpoint_interval;
-        interval > 0 && self.state.iteration % interval == 0
-    }
-
     /// Adds cost to the cumulative total.
     pub fn add_cost(&mut self, cost: f64) {
         self.state.cumulative_cost += cost;
-    }
-
-    /// Records that a checkpoint was created.
-    pub fn record_checkpoint(&mut self) {
-        self.state.checkpoint_count += 1;
-        debug!(
-            checkpoint_count = self.state.checkpoint_count,
-            iteration = self.state.iteration,
-            "Checkpoint recorded"
-        );
     }
 
     /// Verifies all tasks in scratchpad are complete or cancelled.
@@ -766,25 +737,6 @@ event_loop:
 
         // Builder cannot terminate, so no termination reason
         assert_eq!(reason, None);
-    }
-
-    #[test]
-    fn test_checkpoint_interval() {
-        let yaml = r#"
-event_loop:
-  checkpoint_interval: 5
-"#;
-        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
-        let mut event_loop = EventLoop::new(config);
-
-        event_loop.state.iteration = 4;
-        assert!(!event_loop.should_checkpoint());
-
-        event_loop.state.iteration = 5;
-        assert!(event_loop.should_checkpoint());
-
-        event_loop.state.iteration = 10;
-        assert!(event_loop.should_checkpoint());
     }
 
     #[test]
