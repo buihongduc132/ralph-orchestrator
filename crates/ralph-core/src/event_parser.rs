@@ -94,8 +94,44 @@ impl EventParser {
     }
 
     /// Checks if output contains the completion promise.
+    ///
+    /// Per spec: The promise must appear in the agent's final output,
+    /// not inside an `<event>` tag payload. This function strips all
+    /// event tags before checking for the promise.
     pub fn contains_promise(output: &str, promise: &str) -> bool {
-        output.contains(promise)
+        let stripped = Self::strip_event_tags(output);
+        stripped.contains(promise)
+    }
+
+    /// Strips all `<event ...>...</event>` blocks from output.
+    ///
+    /// Returns the output with event tags removed, leaving only
+    /// the "final output" text that should be checked for promises.
+    fn strip_event_tags(output: &str) -> String {
+        let mut result = String::with_capacity(output.len());
+        let mut remaining = output;
+
+        while let Some(start_idx) = remaining.find("<event ") {
+            // Add everything before this event tag
+            result.push_str(&remaining[..start_idx]);
+
+            let after_start = &remaining[start_idx..];
+
+            // Find the closing tag
+            if let Some(close_idx) = after_start.find("</event>") {
+                // Skip past the entire event block
+                remaining = &after_start[close_idx + 8..]; // 8 = "</event>".len()
+            } else {
+                // Malformed: no closing tag, keep the rest and stop
+                result.push_str(after_start);
+                remaining = "";
+                break;
+            }
+        }
+
+        // Add any remaining content after the last event
+        result.push_str(remaining);
+        result
     }
 }
 
@@ -168,5 +204,66 @@ Working on implementation...
         assert!(EventParser::contains_promise("LOOP_COMPLETE", "LOOP_COMPLETE"));
         assert!(EventParser::contains_promise("prefix LOOP_COMPLETE suffix", "LOOP_COMPLETE"));
         assert!(!EventParser::contains_promise("No promise here", "LOOP_COMPLETE"));
+    }
+
+    #[test]
+    fn test_contains_promise_ignores_event_payloads() {
+        // Promise inside event payload should NOT be detected
+        let output = r#"<event topic="build.task">Fix LOOP_COMPLETE detection</event>"#;
+        assert!(!EventParser::contains_promise(output, "LOOP_COMPLETE"));
+
+        // Promise inside event with acceptance criteria mentioning LOOP_COMPLETE
+        let output = r#"<event topic="build.task">
+## Task: Fix completion promise detection
+- Given LOOP_COMPLETE appears inside an event tag
+- Then it should be ignored
+</event>"#;
+        assert!(!EventParser::contains_promise(output, "LOOP_COMPLETE"));
+    }
+
+    #[test]
+    fn test_contains_promise_detects_outside_events() {
+        // Promise outside event tags should be detected
+        let output = r#"<event topic="build.done">Task complete</event>
+All done! LOOP_COMPLETE"#;
+        assert!(EventParser::contains_promise(output, "LOOP_COMPLETE"));
+
+        // Promise before event tags
+        let output = r#"LOOP_COMPLETE
+<event topic="summary">Final summary</event>"#;
+        assert!(EventParser::contains_promise(output, "LOOP_COMPLETE"));
+    }
+
+    #[test]
+    fn test_contains_promise_mixed_content() {
+        // Promise only in event payload, not in surrounding text
+        let output = r#"Working on task...
+<event topic="build.task">Fix LOOP_COMPLETE bug</event>
+Still working..."#;
+        assert!(!EventParser::contains_promise(output, "LOOP_COMPLETE"));
+
+        // Promise in both event and surrounding text - should detect the outer one
+        let output = r#"All tasks done. LOOP_COMPLETE
+<event topic="summary">Completed LOOP_COMPLETE task</event>"#;
+        assert!(EventParser::contains_promise(output, "LOOP_COMPLETE"));
+    }
+
+    #[test]
+    fn test_strip_event_tags() {
+        // Single event
+        let output = r#"before <event topic="test">payload</event> after"#;
+        let stripped = EventParser::strip_event_tags(output);
+        assert_eq!(stripped, "before  after");
+        assert!(!stripped.contains("payload"));
+
+        // Multiple events
+        let output = r#"start <event topic="a">one</event> middle <event topic="b">two</event> end"#;
+        let stripped = EventParser::strip_event_tags(output);
+        assert_eq!(stripped, "start  middle  end");
+
+        // No events
+        let output = "just plain text";
+        let stripped = EventParser::strip_event_tags(output);
+        assert_eq!(stripped, "just plain text");
     }
 }
