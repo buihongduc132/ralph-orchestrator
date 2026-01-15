@@ -11,10 +11,12 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use ralph_adapters::{detect_backend, CliBackend, CliExecutor, ConsoleStreamHandler, PtyConfig, PtyExecutor, QuietStreamHandler};
-use ralph_core::{EventHistory, EventLogger, EventLoop, EventParser, EventRecord, RalphConfig, SummaryWriter, TerminationReason};
+use ralph_core::{EventHistory, EventLogger, EventLoop, EventParser, EventRecord, RalphConfig, Record, SessionRecorder, SummaryWriter, TerminationReason};
 use ralph_proto::{Event, HatId};
 use ralph_tui::Tui;
-use std::io::{stdout, IsTerminal};
+use std::fs::File;
+use std::io::{stdout, BufWriter, IsTerminal};
+use std::sync::Arc;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
@@ -252,6 +254,10 @@ struct RunArgs {
     #[arg(short = 'q', long, conflicts_with = "verbose")]
     quiet: bool,
 
+    /// Record session to JSONL file for replay testing
+    #[arg(long, value_name = "FILE")]
+    record_session: Option<PathBuf>,
+
     /// [DEPRECATED] Use -i/--interactive instead
     #[arg(long, hide = true)]
     tui: bool,
@@ -286,6 +292,10 @@ struct ResumeArgs {
     /// Suppress streaming output (for CI/scripting)
     #[arg(short = 'q', long, conflicts_with = "verbose")]
     quiet: bool,
+
+    /// Record session to JSONL file for replay testing
+    #[arg(long, value_name = "FILE")]
+    record_session: Option<PathBuf>,
 
     /// [DEPRECATED] Use -i/--interactive instead
     #[arg(long, hide = true)]
@@ -351,6 +361,7 @@ async fn main() -> Result<()> {
                 idle_timeout: None,
                 verbose: false,
                 quiet: false,
+                record_session: None,
                 tui: false, // No TUI by default
             };
             run_command(cli.config, cli.verbose, cli.color, args).await
@@ -472,7 +483,7 @@ async fn run_command(
     // Run the orchestration loop and exit with proper exit code
     let enable_tui = args.interactive || args.tui; // Support both for backward compat
     let verbosity = Verbosity::resolve(verbose || args.verbose, args.quiet);
-    let reason = run_loop(config, color_mode, enable_tui, verbosity).await?;
+    let reason = run_loop(config, color_mode, enable_tui, verbosity, args.record_session).await?;
     let exit_code = reason.exit_code();
 
     // Use explicit exit for non-zero codes to ensure proper exit status
@@ -571,7 +582,7 @@ async fn resume_command(
     // signaling the planner to read the existing scratchpad
     let enable_tui = args.interactive || args.tui; // Support both for backward compat
     let verbosity = Verbosity::resolve(verbose || args.verbose, args.quiet);
-    let reason = run_loop_impl(config, color_mode, true, enable_tui, verbosity).await?;
+    let reason = run_loop_impl(config, color_mode, true, enable_tui, verbosity, args.record_session).await?;
     let exit_code = reason.exit_code();
 
     if exit_code != 0 {
@@ -879,15 +890,17 @@ fn resolve_prompt_content(event_loop_config: &ralph_core::EventLoopConfig) -> Re
     )
 }
 
-async fn run_loop(config: RalphConfig, color_mode: ColorMode, enable_tui: bool, verbosity: Verbosity) -> Result<TerminationReason> {
-    run_loop_impl(config, color_mode, false, enable_tui, verbosity).await
+async fn run_loop(config: RalphConfig, color_mode: ColorMode, enable_tui: bool, verbosity: Verbosity, record_session: Option<PathBuf>) -> Result<TerminationReason> {
+    run_loop_impl(config, color_mode, false, enable_tui, verbosity, record_session).await
 }
 
 /// Core loop implementation supporting both fresh start and resume modes.
 ///
 /// `resume`: If true, publishes `task.resume` instead of `task.start`,
 /// signaling the planner to read existing scratchpad rather than doing fresh gap analysis.
-async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool, enable_tui: bool, verbosity: Verbosity) -> Result<TerminationReason> {
+///
+/// `record_session`: If provided, records all events to the specified JSONL file for replay testing.
+async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool, enable_tui: bool, verbosity: Verbosity, record_session: Option<PathBuf>) -> Result<TerminationReason> {
     // Set up process group leadership per spec
     // "The orchestrator must run as a process group leader"
     process_management::setup_process_group();
@@ -971,6 +984,30 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
     } else {
         event_loop.initialize(&prompt_content);
     }
+
+    // Set up session recording if requested
+    // This records all events to a JSONL file for replay testing
+    let _session_recorder: Option<Arc<SessionRecorder<BufWriter<File>>>> = if let Some(record_path) = record_session {
+        let file = File::create(&record_path)
+            .with_context(|| format!("Failed to create session recording file: {:?}", record_path))?;
+        let recorder = Arc::new(SessionRecorder::new(BufWriter::new(file)));
+
+        // Record metadata for the session
+        recorder.record_meta(Record::meta_loop_start(
+            &config.event_loop.prompt_file,
+            config.event_loop.max_iterations,
+            if enable_tui { Some("tui") } else { Some("cli") },
+        ));
+
+        // Wire observer to EventBus so events are recorded
+        let observer = SessionRecorder::make_observer(Arc::clone(&recorder));
+        event_loop.set_observer(observer);
+
+        info!("Session recording enabled: {:?}", record_path);
+        Some(recorder)
+    } else {
+        None
+    };
 
     // Log startup message with registered hats
     let hat_names: Vec<String> = event_loop.registry().ids().map(|id| id.to_string()).collect();
@@ -1275,6 +1312,40 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
 }
 
 /// Executes a prompt in PTY mode with raw terminal handling.
+/// Converts PTY termination type to loop termination reason.
+///
+/// In interactive mode, idle timeout signals "iteration complete" rather than
+/// "loop stopped", allowing the event loop to process output and continue.
+///
+/// # Arguments
+/// * `termination_type` - The PTY executor's termination type
+/// * `interactive` - Whether running in interactive mode
+///
+/// # Returns
+/// * `None` - Continue processing (iteration complete)
+/// * `Some(TerminationReason)` - Stop the loop
+fn convert_termination_type(
+    termination_type: ralph_adapters::TerminationType,
+    interactive: bool,
+) -> Option<TerminationReason> {
+    match termination_type {
+        ralph_adapters::TerminationType::Natural => None,
+        ralph_adapters::TerminationType::IdleTimeout => {
+            if interactive {
+                // In interactive mode, idle timeout signals iteration complete,
+                // not loop termination. Let output be processed for events.
+                info!("PTY idle timeout in interactive mode, iteration complete");
+                None
+            } else {
+                warn!("PTY idle timeout reached, terminating loop");
+                Some(TerminationReason::Stopped)
+            }
+        }
+        ralph_adapters::TerminationType::UserInterrupt
+        | ralph_adapters::TerminationType::ForceKill => Some(TerminationReason::Interrupted),
+    }
+}
+
 ///
 /// # Arguments
 /// * `backend` - The CLI backend to use for command building
@@ -1348,17 +1419,7 @@ async fn execute_pty(
 
     match result {
         Ok(pty_result) => {
-            let termination = match pty_result.termination {
-                ralph_adapters::TerminationType::Natural => None,
-                ralph_adapters::TerminationType::IdleTimeout => {
-                    warn!("PTY idle timeout reached, terminating loop");
-                    Some(TerminationReason::Stopped)
-                }
-                ralph_adapters::TerminationType::UserInterrupt
-                | ralph_adapters::TerminationType::ForceKill => {
-                    Some(TerminationReason::Interrupted)
-                }
-            };
+            let termination = convert_termination_type(pty_result.termination, interactive);
 
             // Use extracted_text for event parsing when available (NDJSON backends like Claude),
             // otherwise fall back to stripped_output (non-JSON backends or interactive mode).
@@ -1495,6 +1556,7 @@ fn get_last_commit_info() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use ralph_core::RalphConfig;
 
     #[test]
@@ -1575,5 +1637,90 @@ mod tests {
             );
             assert!(!user_interactive, "Autonomous mode should not be interactive");
         }
+    }
+
+    #[test]
+    fn test_idle_timeout_interactive_mode_continues() {
+        // Given: interactive mode and IdleTimeout termination
+        let termination_type = ralph_adapters::TerminationType::IdleTimeout;
+        let interactive = true;
+
+        // When: converting termination type
+        let result = convert_termination_type(termination_type, interactive);
+
+        // Then: should return None (allow iteration to continue)
+        assert!(
+            result.is_none(),
+            "Interactive mode idle timeout should return None to allow iteration progression"
+        );
+    }
+
+    #[test]
+    fn test_idle_timeout_autonomous_mode_stops() {
+        // Given: autonomous mode and IdleTimeout termination
+        let termination_type = ralph_adapters::TerminationType::IdleTimeout;
+        let interactive = false;
+
+        // When: converting termination type
+        let result = convert_termination_type(termination_type, interactive);
+
+        // Then: should return Some(Stopped)
+        assert_eq!(
+            result,
+            Some(TerminationReason::Stopped),
+            "Autonomous mode idle timeout should return Stopped"
+        );
+    }
+
+    #[test]
+    fn test_natural_termination_always_continues() {
+        // Given: Natural termination in any mode
+        let termination_type = ralph_adapters::TerminationType::Natural;
+
+        // When/Then: should return None regardless of mode
+        assert!(
+            convert_termination_type(termination_type.clone(), true).is_none(),
+            "Natural termination should continue in interactive mode"
+        );
+        assert!(
+            convert_termination_type(termination_type, false).is_none(),
+            "Natural termination should continue in autonomous mode"
+        );
+    }
+
+    #[test]
+    fn test_user_interrupt_always_terminates() {
+        // Given: UserInterrupt termination in any mode
+        let termination_type = ralph_adapters::TerminationType::UserInterrupt;
+
+        // When/Then: should return Interrupted regardless of mode
+        assert_eq!(
+            convert_termination_type(termination_type.clone(), true),
+            Some(TerminationReason::Interrupted),
+            "UserInterrupt should terminate in interactive mode"
+        );
+        assert_eq!(
+            convert_termination_type(termination_type, false),
+            Some(TerminationReason::Interrupted),
+            "UserInterrupt should terminate in autonomous mode"
+        );
+    }
+
+    #[test]
+    fn test_force_kill_always_terminates() {
+        // Given: ForceKill termination in any mode
+        let termination_type = ralph_adapters::TerminationType::ForceKill;
+
+        // When/Then: should return Interrupted regardless of mode
+        assert_eq!(
+            convert_termination_type(termination_type.clone(), true),
+            Some(TerminationReason::Interrupted),
+            "ForceKill should terminate in interactive mode"
+        );
+        assert_eq!(
+            convert_termination_type(termination_type, false),
+            Some(TerminationReason::Interrupted),
+            "ForceKill should terminate in autonomous mode"
+        );
     }
 }
