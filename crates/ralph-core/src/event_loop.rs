@@ -297,8 +297,29 @@ impl EventLoop {
     }
 
     /// Gets the next hat to execute (if any have pending events).
+    ///
+    /// Per "Hatless Ralph" architecture: When custom hats are defined, Ralph is
+    /// always the executor. Custom hats define topology (pub/sub contracts) that
+    /// Ralph uses for coordination context, but Ralph handles all iterations.
+    ///
+    /// - Solo mode (no custom hats): Returns "ralph" if Ralph has pending events
+    /// - Multi-hat mode (custom hats defined): Always returns "ralph" if ANY hat has pending events
     pub fn next_hat(&self) -> Option<&HatId> {
-        self.bus.next_hat_with_pending()
+        let next = self.bus.next_hat_with_pending();
+
+        // If no pending events, return None
+        next.as_ref()?;
+
+        // In multi-hat mode, always route to Ralph (custom hats define topology only)
+        // Ralph's prompt includes the ## HATS section for coordination awareness
+        if !self.registry.is_empty() {
+            // Return "ralph" - the constant coordinator
+            // Find ralph in the bus's registered hats
+            self.bus.hat_ids().find(|id| id.as_str() == "ralph")
+        } else {
+            // Solo mode - return the next hat (which is "ralph")
+            next
+        }
     }
 
     /// Checks if any hats have pending events.
@@ -354,25 +375,54 @@ impl EventLoop {
 
     /// Builds the prompt for a hat's execution.
     ///
-    /// Per spec: Default hats (planner/builder) use specialized rich prompts
-    /// from `InstructionBuilder`. Custom hats use `build_custom_hat()` with
-    /// their configured instructions. In hatless mode, "ralph" uses HatlessRalph's
-    /// solo mode prompt.
+    /// Per "Hatless Ralph" architecture:
+    /// - Solo mode: Ralph handles everything with his own prompt
+    /// - Multi-hat mode: Ralph is the sole executor, custom hats define topology only
+    ///
+    /// When in multi-hat mode, this method collects ALL pending events across all hats
+    /// and builds Ralph's prompt with that context. The `## HATS` section in Ralph's
+    /// prompt documents the topology for coordination awareness.
     pub fn build_prompt(&mut self, hat_id: &HatId) -> Option<String> {
+        // Handle "ralph" hat - the constant coordinator
+        // Per spec: "Hatless Ralph is constant — Cannot be replaced, overwritten, or configured away"
+        if hat_id.as_str() == "ralph" {
+            // In multi-hat mode, collect ALL pending events (Ralph handles everything)
+            let events_context = if !self.registry.is_empty() {
+                // Collect from all hats including ralph
+                let all_hat_ids: Vec<HatId> = self.bus.hat_ids().cloned().collect();
+                let mut all_events = Vec::new();
+                for id in all_hat_ids {
+                    all_events.extend(self.bus.take_pending(&id));
+                }
+                all_events
+                    .iter()
+                    .map(|e| format!("Event: {} - {}", e.topic, e.payload))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                // Solo mode - just Ralph's events
+                let events = self.bus.take_pending(&hat_id.clone());
+                events
+                    .iter()
+                    .map(|e| format!("Event: {} - {}", e.topic, e.payload))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+
+            let mode = if self.registry.is_empty() { "solo" } else { "multi-hat coordinator" };
+            debug!("build_prompt: routing to HatlessRalph ({} mode)", mode);
+            return Some(self.ralph.build_prompt(&events_context));
+        }
+
+        // Non-ralph hat requested - this shouldn't happen in multi-hat mode since
+        // next_hat() always returns "ralph" when custom hats are defined.
+        // But we keep this code path for backward compatibility and tests.
         let events = self.bus.take_pending(&hat_id.clone());
         let events_context = events
             .iter()
             .map(|e| format!("Event: {} - {}", e.topic, e.payload))
             .collect::<Vec<_>>()
             .join("\n");
-
-        // Handle "ralph" hat specially - Ralph is always present as the coordinator
-        // Per spec: "Hatless Ralph is constant — Cannot be replaced, overwritten, or configured away"
-        if hat_id.as_str() == "ralph" {
-            let mode = if self.registry.is_empty() { "solo" } else { "multi-hat fallback" };
-            debug!("build_prompt: routing to HatlessRalph ({} mode)", mode);
-            return Some(self.ralph.build_prompt(&events_context));
-        }
 
         let hat = self.registry.get(hat_id)?;
 
@@ -794,7 +844,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_initialization_triggers_planner() {
+    fn test_initialization_routes_to_ralph_in_multihat_mode() {
+        // Per "Hatless Ralph" architecture: When custom hats are defined,
+        // Ralph is always the executor. Custom hats define topology only.
         let yaml = r#"
 hats:
   planner:
@@ -807,10 +859,14 @@ hats:
 
         event_loop.initialize("Test prompt");
 
-        // Per spec: task.start triggers planner hat
+        // Per spec: In multi-hat mode, Ralph handles all iterations
         let next = event_loop.next_hat();
         assert!(next.is_some());
-        assert_eq!(next.unwrap().as_str(), "planner");
+        assert_eq!(next.unwrap().as_str(), "ralph", "Multi-hat mode should route to Ralph");
+
+        // Verify Ralph's prompt includes the event
+        let prompt = event_loop.build_prompt(&HatId::new("ralph")).unwrap();
+        assert!(prompt.contains("task.start"), "Ralph's prompt should include the event");
     }
 
     #[test]
@@ -1123,8 +1179,10 @@ hats:
     }
 
     #[test]
-    fn test_custom_hat_triggers_work_correctly() {
-        // Test that custom hat triggers are properly registered and work
+    fn test_custom_hat_topology_visible_to_ralph() {
+        // Per "Hatless Ralph" architecture: Custom hats define topology,
+        // but Ralph handles all iterations. This test verifies hat topology
+        // is visible in Ralph's prompt.
         let yaml = r#"
 hats:
   deployer:
@@ -1136,18 +1194,24 @@ hats:
         let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
         let mut event_loop = EventLoop::new(config);
 
-        // Test first trigger
+        // Publish an event that the deployer hat would conceptually handle
         event_loop.bus.publish(Event::new("deploy.request", "Deploy to staging"));
-        let next_hat = event_loop.next_hat();
-        assert_eq!(next_hat.unwrap().as_str(), "deployer");
 
-        // Clear the event and test second trigger
-        let deployer_id = HatId::new("deployer");
-        event_loop.build_prompt(&deployer_id); // This consumes pending events
-
-        event_loop.bus.publish(Event::new("deploy.rollback", "Rollback v1.2.3"));
+        // In multi-hat mode, next_hat always returns "ralph"
         let next_hat = event_loop.next_hat();
-        assert_eq!(next_hat.unwrap().as_str(), "deployer");
+        assert_eq!(next_hat.unwrap().as_str(), "ralph", "Multi-hat mode routes to Ralph");
+
+        // Build Ralph's prompt - it should include the event context
+        let prompt = event_loop.build_prompt(&HatId::new("ralph")).unwrap();
+
+        // Ralph's prompt should include:
+        // 1. The event topic that was published (payload format: "Event: topic - payload")
+        assert!(prompt.contains("deploy.request"), "Ralph's prompt should include the event topic");
+
+        // 2. The HATS section documenting the topology
+        assert!(prompt.contains("## HATS"), "Ralph's prompt should include hat topology");
+        assert!(prompt.contains("Deployment Manager"), "Hat topology should include hat name");
+        assert!(prompt.contains("deploy.request"), "Hat triggers should be in topology");
     }
 
     #[test]
@@ -1539,5 +1603,145 @@ hats:
         assert!(prompt.contains("## WORKFLOW"), "Should have workflow section");
         assert!(prompt.contains("## EVENT WRITING"), "Should have event writing section");
         assert!(prompt.contains("LOOP_COMPLETE"), "Should reference completion promise");
+    }
+
+    // === "Always Hatless Iteration" Architecture Tests ===
+    // These tests verify the core invariants of the Hatless Ralph architecture:
+    // - Ralph is always the sole executor when custom hats are defined
+    // - Custom hats define topology (pub/sub contracts) for coordination context
+    // - Ralph's prompt includes the ## HATS section documenting the topology
+
+    #[test]
+    fn test_always_hatless_ralph_executes_all_iterations() {
+        // Per acceptance criteria #1: Ralph executes all iterations with custom hats
+        let yaml = r#"
+hats:
+  planner:
+    name: "Planner"
+    triggers: ["task.start", "build.done"]
+    publishes: ["build.task"]
+  builder:
+    name: "Builder"
+    triggers: ["build.task"]
+    publishes: ["build.done"]
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut event_loop = EventLoop::new(config);
+
+        // Simulate the workflow: task.start → planner (conceptually)
+        event_loop.initialize("Implement feature X");
+        assert_eq!(event_loop.next_hat().unwrap().as_str(), "ralph");
+
+        // Simulate build.task → builder (conceptually)
+        event_loop.build_prompt(&HatId::new("ralph")); // Consume task.start
+        event_loop.bus.publish(Event::new("build.task", "Build feature X"));
+        assert_eq!(event_loop.next_hat().unwrap().as_str(), "ralph", "build.task should route to Ralph");
+
+        // Simulate build.done → planner (conceptually)
+        event_loop.build_prompt(&HatId::new("ralph")); // Consume build.task
+        event_loop.bus.publish(Event::new("build.done", "Feature X complete"));
+        assert_eq!(event_loop.next_hat().unwrap().as_str(), "ralph", "build.done should route to Ralph");
+    }
+
+    #[test]
+    fn test_always_hatless_solo_mode_unchanged() {
+        // Per acceptance criteria #3: Solo mode (no hats) operates as before
+        let config = RalphConfig::default();
+        let mut event_loop = EventLoop::new(config);
+
+        assert!(event_loop.registry().is_empty(), "Solo mode has no custom hats");
+
+        event_loop.initialize("Do something");
+        assert_eq!(event_loop.next_hat().unwrap().as_str(), "ralph");
+
+        // Solo mode prompt should NOT have ## HATS section
+        let prompt = event_loop.build_prompt(&HatId::new("ralph")).unwrap();
+        assert!(!prompt.contains("## HATS"), "Solo mode should not have HATS section");
+    }
+
+    #[test]
+    fn test_always_hatless_topology_preserved_in_prompt() {
+        // Per acceptance criteria #2 and #4: Hat topology preserved for coordination
+        let yaml = r#"
+hats:
+  planner:
+    name: "Planner"
+    triggers: ["task.start", "build.done", "build.blocked"]
+    publishes: ["build.task"]
+  builder:
+    name: "Builder"
+    triggers: ["build.task"]
+    publishes: ["build.done", "build.blocked"]
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut event_loop = EventLoop::new(config);
+        event_loop.initialize("Test");
+
+        let prompt = event_loop.build_prompt(&HatId::new("ralph")).unwrap();
+
+        // Verify ## HATS section with topology table
+        assert!(prompt.contains("## HATS"), "Should have HATS section");
+        assert!(prompt.contains("Delegate via events"), "Should explain delegation");
+        assert!(prompt.contains("| Hat | Triggers On | Publishes |"), "Should have topology table");
+
+        // Verify both hats are documented
+        assert!(prompt.contains("Planner"), "Should include Planner hat");
+        assert!(prompt.contains("Builder"), "Should include Builder hat");
+
+        // Verify trigger and publish information
+        assert!(prompt.contains("build.task"), "Should document build.task event");
+        assert!(prompt.contains("build.done"), "Should document build.done event");
+    }
+
+    #[test]
+    fn test_always_hatless_no_backend_delegation() {
+        // Per acceptance criteria #5: Custom hat backends are NOT used
+        // This is architectural - the EventLoop.next_hat() always returns "ralph"
+        // so per-hat backends (if configured) are never invoked
+        let yaml = r#"
+hats:
+  builder:
+    name: "Builder"
+    triggers: ["build.task"]
+    backend: "gemini"  # This backend should NEVER be used
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut event_loop = EventLoop::new(config);
+
+        event_loop.bus.publish(Event::new("build.task", "Test"));
+
+        // Despite builder having a specific backend, Ralph handles the iteration
+        let next = event_loop.next_hat();
+        assert_eq!(next.unwrap().as_str(), "ralph", "Ralph handles all iterations");
+
+        // The backend delegation would happen in main.rs, but since we always
+        // return "ralph" from next_hat(), the gemini backend is never selected
+    }
+
+    #[test]
+    fn test_always_hatless_collects_all_pending_events() {
+        // Verify Ralph's prompt includes events from ALL hats when in multi-hat mode
+        let yaml = r#"
+hats:
+  planner:
+    name: "Planner"
+    triggers: ["task.start"]
+  builder:
+    name: "Builder"
+    triggers: ["build.task"]
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut event_loop = EventLoop::new(config);
+
+        // Publish events that would go to different hats
+        event_loop.bus.publish(Event::new("task.start", "Start task"));
+        event_loop.bus.publish(Event::new("build.task", "Build something"));
+
+        // Ralph should collect ALL pending events
+        let prompt = event_loop.build_prompt(&HatId::new("ralph")).unwrap();
+
+        // Both events should be in Ralph's context
+        assert!(prompt.contains("task.start"), "Should include task.start event");
+        assert!(prompt.contains("build.task"), "Should include build.task event");
     }
 }
