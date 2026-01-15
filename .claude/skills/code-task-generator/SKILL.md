@@ -90,6 +90,7 @@ Create appropriate file structure based on mode and approved plan.
 - For PDD mode: You MUST include specific research documents in "Additional References" only if they are directly relevant to the task (e.g., specific technology research for that component)
 - For PDD mode: You MUST add a note instructing agents to read the detailed design before implementation
 - For description mode: You MUST create single task or multiple tasks as planned
+- You MUST add YAML frontmatter with `status: pending`, `created: <current date in YYYY-MM-DD format>`, `started: null`, `completed: null`
 - You MUST generate task names using kebab-case format
 - You MUST create files with `.code-task.md` extension
 - You MUST follow the exact format specified in the Code Task Format section below
@@ -116,6 +117,12 @@ Inform user about generated tasks and next steps.
 Each code task file MUST follow this exact structure:
 
 ```markdown
+---
+status: pending
+created: YYYY-MM-DD
+started: null
+completed: null
+---
 # Task: [Task Name]
 
 ## Description
@@ -167,6 +174,12 @@ Each code task file MUST follow this exact structure:
 ### Code Task Format Example
 
 ```markdown
+---
+status: pending
+created: 2026-01-15
+started: null
+completed: null
+---
 # Task: Create Email Validator Function
 
 ## Description

@@ -65,6 +65,7 @@ If CODEASSIST.md exists in repo_root, it contains additional constraints, pre/po
 Initialize the project environment and create necessary directory structures.
 
 **Constraints:**
+- If the task_description is a file path to a `.code-task.md` file with YAML frontmatter, You MUST update the frontmatter to set `status: in_progress` and `started: <current date in YYYY-MM-DD format>` (only if `started` is currently `null`)
 - You MUST validate and create the documentation directory structure properly:
   - Use `mkdir -p {documentation_dir}` to explicitly create the documentation directory as a directory
   - Create the full path: `{documentation_dir}/implementation/{task_name}/` with logs subdirectory using `mkdir -p`
@@ -319,6 +320,7 @@ If all tests are passing, draft a conventional commit message and perform the ac
 
 **Constraints:**
 - You MUST check that all tasks are complete before proceeding
+- If the original task_description was a file path to a `.code-task.md` file with YAML frontmatter, You MUST update the frontmatter to set `status: completed` and `completed: <current date in YYYY-MM-DD format>` before committing
 - You MUST NOT commit changes until builds AND tests have been verified because committing broken code can disrupt the development workflow and introduce bugs into the codebase 
 - You MUST follow the Conventional Commits specification
 - You MUST use git status to check which files have been modified
@@ -413,6 +415,13 @@ If the implementation encounters unexpected challenges:
 - You MAY use available tools to search code repositories, read documentation, and gather relevant information
 - In interactive mode, you SHOULD ask for user guidance on how to proceed
 - In auto mode, you SHOULD select the most promising alternative and document the decision
+
+### Task File Frontmatter Issues
+If the task file has missing or malformed YAML frontmatter:
+- You SHOULD skip frontmatter status updates if the file has no frontmatter (continue with the task normally)
+- You SHOULD log a warning if frontmatter is malformed but continue with the task
+- You SHOULD NOT fail the task due to frontmatter issues
+- If status is already `completed`, You SHOULD warn the user but allow re-running if explicitly requested
 
 ## Best Practices
 
