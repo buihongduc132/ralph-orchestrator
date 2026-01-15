@@ -1464,12 +1464,20 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
 
         let iteration = event_loop.state().iteration + 1;
 
+        // Determine which hat to display in iteration separator
+        // When Ralph is coordinating (hat_id == "ralph"), show the active hat being worked on
+        let display_hat = if hat_id.as_str() == "ralph" {
+            event_loop.get_active_hat_id()
+        } else {
+            hat_id.clone()
+        };
+
         // Per spec: Print iteration demarcation separator
         // "Each iteration must be clearly demarcated in the output so users can
         // visually distinguish where one iteration ends and another begins."
         print_iteration_separator(
             iteration,
-            hat_id.as_str(),
+            display_hat.as_str(),
             event_loop.state().elapsed(),
             config.event_loop.max_iterations,
             use_colors,

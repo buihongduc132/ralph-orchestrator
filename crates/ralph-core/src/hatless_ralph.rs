@@ -74,8 +74,18 @@ impl HatlessRalph {
         }
     }
 
-    /// Builds Ralph's prompt based on context.
-    pub fn build_prompt(&self, context: &str) -> String {
+    /// Builds Ralph's prompt with filtered instructions for only active hats.
+    ///
+    /// This method reduces token usage by including instructions only for hats
+    /// that are currently triggered by pending events, while still showing the
+    /// full hat topology table for context.
+    ///
+    /// For solo mode (no hats), pass an empty slice: `&[]`
+    pub fn build_prompt(
+        &self,
+        context: &str,
+        active_hats: &[&ralph_proto::Hat],
+    ) -> String {
         let mut prompt = self.core_prompt();
 
         // Include pending events BEFORE workflow so Ralph sees the task first
@@ -88,7 +98,7 @@ impl HatlessRalph {
         prompt.push_str(&self.workflow_section());
 
         if let Some(topology) = &self.hat_topology {
-            prompt.push_str(&self.hats_section(topology));
+            prompt.push_str(&self.hats_section(topology, active_hats));
         }
 
         prompt.push_str(&self.event_writing_section());
@@ -213,7 +223,7 @@ Until all tasks `[x]` or `[~]`.
         }
     }
 
-    fn hats_section(&self, topology: &HatTopology) -> String {
+    fn hats_section(&self, topology: &HatTopology, active_hats: &[&ralph_proto::Hat]) -> String {
         let mut section = String::from("## HATS\n\nDelegate via events.\n\n");
 
         // Include starting_event instruction if configured
@@ -224,7 +234,7 @@ Until all tasks `[x]` or `[~]`.
             ));
         }
 
-        // Build hat table
+        // Build hat table - ALWAYS shows ALL hats for context
         section.push_str("| Hat | Triggers On | Publishes |\n");
         section.push_str("|-----|-------------|----------|\n");
 
@@ -236,12 +246,13 @@ Until all tasks `[x]` or `[~]`.
 
         section.push('\n');
 
-        // Add instructions sections for hats with non-empty instructions
-        for hat in &topology.hats {
-            if !hat.instructions.trim().is_empty() {
-                section.push_str(&format!("### {} Instructions\n\n", hat.name));
-                section.push_str(&hat.instructions);
-                if !hat.instructions.ends_with('\n') {
+        // Add instructions sections ONLY for active hats
+        // If the slice is empty, no instructions are added (no active hats)
+        for active_hat in active_hats {
+            if !active_hat.instructions.trim().is_empty() {
+                section.push_str(&format!("### {} Instructions\n\n", active_hat.name));
+                section.push_str(&active_hat.instructions);
+                if !active_hat.instructions.ends_with('\n') {
                     section.push('\n');
                 }
                 section.push('\n');
@@ -285,7 +296,7 @@ mod tests {
         let registry = HatRegistry::new(); // Empty registry
         let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
 
-        let prompt = ralph.build_prompt("");
+        let prompt = ralph.build_prompt("", &[]);
 
         // Identity with ghuntley style
         assert!(prompt.contains("I'm Ralph. Fresh context each iteration."));
@@ -341,7 +352,7 @@ hats:
         // Note: No starting_event - tests normal multi-hat workflow (not fast path)
         let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
 
-        let prompt = ralph.build_prompt("");
+        let prompt = ralph.build_prompt("", &[]);
 
         // Identity with ghuntley style
         assert!(prompt.contains("I'm Ralph. Fresh context each iteration."));
@@ -390,7 +401,7 @@ hats:
         let registry = HatRegistry::new();
         let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
 
-        let prompt = ralph.build_prompt("");
+        let prompt = ralph.build_prompt("", &[]);
 
         // Key ghuntley language patterns
         assert!(prompt.contains("Study"), "Should use 'study' verb");
@@ -422,7 +433,7 @@ hats:
         let registry = HatRegistry::new();
         let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
 
-        let prompt = ralph.build_prompt("");
+        let prompt = ralph.build_prompt("", &[]);
 
         // Task marker format is documented
         assert!(prompt.contains("- `[ ]` pending"));
@@ -449,7 +460,7 @@ hats:
             Some("tdd.start".to_string()),
         );
 
-        let prompt = ralph.build_prompt("");
+        let prompt = ralph.build_prompt("", &[]);
 
         // Should include delegation instruction
         assert!(
@@ -471,7 +482,7 @@ hats:
         let registry = HatRegistry::from_config(&config);
         let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
 
-        let prompt = ralph.build_prompt("");
+        let prompt = ralph.build_prompt("", &[]);
 
         // Should NOT include delegation instruction
         assert!(
@@ -504,7 +515,9 @@ hats:
             Some("tdd.start".to_string()),
         );
 
-        let prompt = ralph.build_prompt("");
+        // Get the tdd_writer hat as active to see its instructions
+        let tdd_writer = registry.get(&ralph_proto::HatId::new("tdd_writer")).unwrap();
+        let prompt = ralph.build_prompt("", &[tdd_writer]);
 
         // Instructions should appear in the prompt
         assert!(
@@ -540,7 +553,7 @@ hats:
             None,
         );
 
-        let prompt = ralph.build_prompt("");
+        let prompt = ralph.build_prompt("", &[]);
 
         // No instructions section should appear for hats without instructions
         assert!(
@@ -574,7 +587,10 @@ hats:
             None,
         );
 
-        let prompt = ralph.build_prompt("");
+        // Get both hats as active to see their instructions
+        let planner = registry.get(&ralph_proto::HatId::new("planner")).unwrap();
+        let builder = registry.get(&ralph_proto::HatId::new("builder")).unwrap();
+        let prompt = ralph.build_prompt("", &[planner, builder]);
 
         // Both hats' instructions should appear
         assert!(
@@ -617,7 +633,7 @@ hats:
             Some("tdd.start".to_string()),
         );
 
-        let prompt = ralph.build_prompt("");
+        let prompt = ralph.build_prompt("", &[]);
 
         // Should use fast path - immediate delegation
         assert!(
@@ -646,7 +662,7 @@ hats:
         let events_context = r#"[task.start] User's task: Review this code for security vulnerabilities
 [build.done] Build completed successfully"#;
 
-        let prompt = ralph.build_prompt(events_context);
+        let prompt = ralph.build_prompt(events_context, &[]);
 
         assert!(
             prompt.contains("## PENDING EVENTS"),
@@ -671,7 +687,7 @@ hats:
         let registry = HatRegistry::new();
         let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
 
-        let prompt = ralph.build_prompt("");
+        let prompt = ralph.build_prompt("", &[]);
 
         assert!(
             !prompt.contains("## PENDING EVENTS"),
@@ -688,7 +704,7 @@ hats:
         let registry = HatRegistry::new();
         let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
 
-        let prompt = ralph.build_prompt("   \n\t  ");
+        let prompt = ralph.build_prompt("   \n\t  ", &[]);
 
         assert!(
             !prompt.contains("## PENDING EVENTS"),
@@ -706,7 +722,7 @@ hats:
         let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
 
         let events_context = "[task.start] Implement feature X";
-        let prompt = ralph.build_prompt(events_context);
+        let prompt = ralph.build_prompt(events_context, &[]);
 
         let events_pos = prompt.find("## PENDING EVENTS").expect("Should have PENDING EVENTS");
         let workflow_pos = prompt.find("## WORKFLOW").expect("Should have WORKFLOW");
@@ -716,6 +732,198 @@ hats:
             "PENDING EVENTS ({}) should come before WORKFLOW ({})",
             events_pos,
             workflow_pos
+        );
+    }
+
+    // === Phase 3: Filtered Hat Instructions Tests ===
+
+    #[test]
+    fn test_only_active_hat_instructions_included() {
+        // Scenario 4 from plan.md: Only active hat instructions included in prompt
+        let yaml = r#"
+hats:
+  security_reviewer:
+    name: "Security Reviewer"
+    triggers: ["review.security"]
+    instructions: "Review code for security vulnerabilities."
+  architecture_reviewer:
+    name: "Architecture Reviewer"
+    triggers: ["review.architecture"]
+    instructions: "Review system design and architecture."
+  correctness_reviewer:
+    name: "Correctness Reviewer"
+    triggers: ["review.correctness"]
+    instructions: "Review logic and correctness."
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let registry = HatRegistry::from_config(&config);
+        let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
+
+        // Get active hats - only security_reviewer is active
+        let security_hat = registry.get(&ralph_proto::HatId::new("security_reviewer")).unwrap();
+        let active_hats = vec![security_hat];
+
+        let prompt = ralph.build_prompt("Event: review.security - Check auth", &active_hats);
+
+        // Should contain ONLY security_reviewer instructions
+        assert!(
+            prompt.contains("### Security Reviewer Instructions"),
+            "Should include Security Reviewer instructions section"
+        );
+        assert!(
+            prompt.contains("Review code for security vulnerabilities"),
+            "Should include Security Reviewer instructions content"
+        );
+
+        // Should NOT contain other hats' instructions
+        assert!(
+            !prompt.contains("### Architecture Reviewer Instructions"),
+            "Should NOT include Architecture Reviewer instructions"
+        );
+        assert!(
+            !prompt.contains("Review system design and architecture"),
+            "Should NOT include Architecture Reviewer instructions content"
+        );
+        assert!(
+            !prompt.contains("### Correctness Reviewer Instructions"),
+            "Should NOT include Correctness Reviewer instructions"
+        );
+    }
+
+    #[test]
+    fn test_multiple_active_hats_all_included() {
+        // Scenario 6 from plan.md: Multiple active hats includes all instructions
+        let yaml = r#"
+hats:
+  security_reviewer:
+    name: "Security Reviewer"
+    triggers: ["review.security"]
+    instructions: "Review code for security vulnerabilities."
+  architecture_reviewer:
+    name: "Architecture Reviewer"
+    triggers: ["review.architecture"]
+    instructions: "Review system design and architecture."
+  correctness_reviewer:
+    name: "Correctness Reviewer"
+    triggers: ["review.correctness"]
+    instructions: "Review logic and correctness."
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let registry = HatRegistry::from_config(&config);
+        let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
+
+        // Get active hats - both security_reviewer and architecture_reviewer are active
+        let security_hat = registry.get(&ralph_proto::HatId::new("security_reviewer")).unwrap();
+        let arch_hat = registry.get(&ralph_proto::HatId::new("architecture_reviewer")).unwrap();
+        let active_hats = vec![security_hat, arch_hat];
+
+        let prompt = ralph.build_prompt("Events", &active_hats);
+
+        // Should contain BOTH active hats' instructions
+        assert!(
+            prompt.contains("### Security Reviewer Instructions"),
+            "Should include Security Reviewer instructions"
+        );
+        assert!(
+            prompt.contains("Review code for security vulnerabilities"),
+            "Should include Security Reviewer content"
+        );
+        assert!(
+            prompt.contains("### Architecture Reviewer Instructions"),
+            "Should include Architecture Reviewer instructions"
+        );
+        assert!(
+            prompt.contains("Review system design and architecture"),
+            "Should include Architecture Reviewer content"
+        );
+
+        // Should NOT contain inactive hat's instructions
+        assert!(
+            !prompt.contains("### Correctness Reviewer Instructions"),
+            "Should NOT include Correctness Reviewer instructions"
+        );
+    }
+
+    #[test]
+    fn test_no_active_hats_no_instructions() {
+        // No active hats = no instructions section (but topology table still present)
+        let yaml = r#"
+hats:
+  security_reviewer:
+    name: "Security Reviewer"
+    triggers: ["review.security"]
+    instructions: "Review code for security vulnerabilities."
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let registry = HatRegistry::from_config(&config);
+        let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
+
+        // No active hats
+        let active_hats: Vec<&ralph_proto::Hat> = vec![];
+
+        let prompt = ralph.build_prompt("Events", &active_hats);
+
+        // Should NOT contain any instructions
+        assert!(
+            !prompt.contains("### Security Reviewer Instructions"),
+            "Should NOT include instructions when no active hats"
+        );
+        assert!(
+            !prompt.contains("Review code for security vulnerabilities"),
+            "Should NOT include instructions content when no active hats"
+        );
+
+        // But topology table should still be present
+        assert!(
+            prompt.contains("## HATS"),
+            "Should still have HATS section"
+        );
+        assert!(
+            prompt.contains("| Hat | Triggers On | Publishes |"),
+            "Should still have topology table"
+        );
+    }
+
+    #[test]
+    fn test_topology_table_always_present() {
+        // Scenario 7 from plan.md: Full hat topology table always shown
+        let yaml = r#"
+hats:
+  security_reviewer:
+    name: "Security Reviewer"
+    triggers: ["review.security"]
+    instructions: "Security instructions."
+  architecture_reviewer:
+    name: "Architecture Reviewer"
+    triggers: ["review.architecture"]
+    instructions: "Architecture instructions."
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let registry = HatRegistry::from_config(&config);
+        let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
+
+        // Only security_reviewer is active
+        let security_hat = registry.get(&ralph_proto::HatId::new("security_reviewer")).unwrap();
+        let active_hats = vec![security_hat];
+
+        let prompt = ralph.build_prompt("Events", &active_hats);
+
+        // Topology table should show ALL hats (not just active ones)
+        assert!(
+            prompt.contains("| Security Reviewer |"),
+            "Topology table should include Security Reviewer"
+        );
+        assert!(
+            prompt.contains("| Architecture Reviewer |"),
+            "Topology table should include Architecture Reviewer even though inactive"
+        );
+        assert!(
+            prompt.contains("review.security"),
+            "Topology table should show triggers"
+        );
+        assert!(
+            prompt.contains("review.architecture"),
+            "Topology table should show all triggers"
         );
     }
 }

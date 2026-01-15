@@ -8,7 +8,7 @@ use crate::event_reader::EventReader;
 use crate::hat_registry::HatRegistry;
 use crate::hatless_ralph::HatlessRalph;
 use crate::instructions::InstructionBuilder;
-use ralph_proto::{Event, EventBus, HatId};
+use ralph_proto::{Event, EventBus, Hat, HatId};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
@@ -386,32 +386,40 @@ impl EventLoop {
         // Handle "ralph" hat - the constant coordinator
         // Per spec: "Hatless Ralph is constant — Cannot be replaced, overwritten, or configured away"
         if hat_id.as_str() == "ralph" {
-            // In multi-hat mode, collect ALL pending events (Ralph handles everything)
-            let events_context = if !self.registry.is_empty() {
-                // Collect from all hats including ralph
+            if !self.registry.is_empty() {
+                // Multi-hat mode: collect events and determine active hats
                 let all_hat_ids: Vec<HatId> = self.bus.hat_ids().cloned().collect();
                 let mut all_events = Vec::new();
                 for id in all_hat_ids {
                     all_events.extend(self.bus.take_pending(&id));
                 }
-                all_events
-                    .iter()
-                    .map(|e| format!("Event: {} - {}", e.topic, e.payload))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            } else {
-                // Solo mode - just Ralph's events
-                let events = self.bus.take_pending(&hat_id.clone());
-                events
-                    .iter()
-                    .map(|e| format!("Event: {} - {}", e.topic, e.payload))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            };
 
-            let mode = if self.registry.is_empty() { "solo" } else { "multi-hat coordinator" };
-            debug!("build_prompt: routing to HatlessRalph ({} mode)", mode);
-            return Some(self.ralph.build_prompt(&events_context));
+                // Determine which hats are active based on events
+                let active_hats = self.determine_active_hats(&all_events);
+
+                // Format events for context
+                let events_context = all_events
+                    .iter()
+                    .map(|e| format!("Event: {} - {}", e.topic, e.payload))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                // Build prompt with active hats - filters instructions to only active hats
+                debug!("build_prompt: routing to HatlessRalph (multi-hat coordinator mode), active_hats: {:?}",
+                       active_hats.iter().map(|h| h.id.as_str()).collect::<Vec<_>>());
+                return Some(self.ralph.build_prompt(&events_context, &active_hats));
+            } else {
+                // Solo mode - just Ralph's events, no hats to filter
+                let events = self.bus.take_pending(&hat_id.clone());
+                let events_context = events
+                    .iter()
+                    .map(|e| format!("Event: {} - {}", e.topic, e.payload))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                debug!("build_prompt: routing to HatlessRalph (solo mode)");
+                return Some(self.ralph.build_prompt(&events_context, &[]));
+            }
         }
 
         // Non-ralph hat requested - this shouldn't happen in multi-hat mode since
@@ -443,7 +451,41 @@ impl EventLoop {
 
     /// Builds the Ralph prompt (coordination mode).
     pub fn build_ralph_prompt(&self, prompt_content: &str) -> String {
-        self.ralph.build_prompt(prompt_content)
+        self.ralph.build_prompt(prompt_content, &[])
+    }
+
+    /// Determines which hats should be active based on pending events.
+    /// Returns list of Hat references that are triggered by any pending event.
+    fn determine_active_hats(&self, events: &[Event]) -> Vec<&Hat> {
+        let mut active_hats = Vec::new();
+        for event in events {
+            if let Some(hat) = self.registry.get_for_topic(event.topic.as_str()) {
+                // Avoid duplicates
+                if !active_hats.iter().any(|h: &&Hat| h.id == hat.id) {
+                    active_hats.push(hat);
+                }
+            }
+        }
+        active_hats
+    }
+
+    /// Returns the primary active hat ID for display purposes.
+    /// Returns the first active hat, or "ralph" if no specific hat is active.
+    pub fn get_active_hat_id(&self) -> HatId {
+        // Peek at pending events (don't consume them)
+        for hat_id in self.bus.hat_ids() {
+            if let Some(events) = self.bus.peek_pending(hat_id) {
+                if !events.is_empty() {
+                    // Return the hat ID that this event triggers
+                    if let Some(event) = events.first() {
+                        if let Some(active_hat) = self.registry.get_for_topic(event.topic.as_str()) {
+                            return active_hat.id.clone();
+                        }
+                    }
+                }
+            }
+        }
+        HatId::new("ralph")
     }
 
     /// Records the current event count before hat execution.
@@ -1743,5 +1785,86 @@ hats:
         // Both events should be in Ralph's context
         assert!(prompt.contains("task.start"), "Should include task.start event");
         assert!(prompt.contains("build.task"), "Should include build.task event");
+    }
+
+    // === Phase 2: Active Hat Detection Tests ===
+
+    #[test]
+    fn test_determine_active_hats() {
+        // Create EventLoop with 3 hats (security_reviewer, architecture_reviewer, correctness_reviewer)
+        let yaml = r#"
+hats:
+  security_reviewer:
+    name: "Security Reviewer"
+    triggers: ["review.security"]
+  architecture_reviewer:
+    name: "Architecture Reviewer"
+    triggers: ["review.architecture"]
+  correctness_reviewer:
+    name: "Correctness Reviewer"
+    triggers: ["review.correctness"]
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let event_loop = EventLoop::new(config);
+
+        // Create events: [Event("review.security", "..."), Event("review.architecture", "...")]
+        let events = vec![
+            Event::new("review.security", "Check for vulnerabilities"),
+            Event::new("review.architecture", "Review design patterns"),
+        ];
+
+        // Call determine_active_hats(&events)
+        let active_hats = event_loop.determine_active_hats(&events);
+
+        // Assert: Returns Vec with exactly security_reviewer and architecture_reviewer Hats
+        assert_eq!(active_hats.len(), 2, "Should return exactly 2 active hats");
+
+        let hat_ids: Vec<&str> = active_hats.iter().map(|h| h.id.as_str()).collect();
+        assert!(hat_ids.contains(&"security_reviewer"), "Should include security_reviewer");
+        assert!(hat_ids.contains(&"architecture_reviewer"), "Should include architecture_reviewer");
+        assert!(!hat_ids.contains(&"correctness_reviewer"), "Should NOT include correctness_reviewer");
+    }
+
+    #[test]
+    fn test_get_active_hat_id_with_pending_event() {
+        // Create EventLoop with security_reviewer hat
+        let yaml = r#"
+hats:
+  security_reviewer:
+    name: "Security Reviewer"
+    triggers: ["review.security"]
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let mut event_loop = EventLoop::new(config);
+
+        // Publish Event("review.security", "...")
+        event_loop.bus.publish(Event::new("review.security", "Check authentication"));
+
+        // Call get_active_hat_id()
+        let active_hat_id = event_loop.get_active_hat_id();
+
+        // Assert: Returns HatId("security_reviewer"), NOT "ralph"
+        assert_eq!(active_hat_id.as_str(), "security_reviewer",
+                   "Should return security_reviewer, not ralph");
+    }
+
+    #[test]
+    fn test_get_active_hat_id_no_pending_returns_ralph() {
+        // Create EventLoop with hats but NO pending events
+        let yaml = r#"
+hats:
+  security_reviewer:
+    name: "Security Reviewer"
+    triggers: ["review.security"]
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let event_loop = EventLoop::new(config);
+
+        // Call get_active_hat_id() - no pending events
+        let active_hat_id = event_loop.get_active_hat_id();
+
+        // Assert: Returns HatId("ralph")
+        assert_eq!(active_hat_id.as_str(), "ralph",
+                   "Should return ralph when no pending events");
     }
 }

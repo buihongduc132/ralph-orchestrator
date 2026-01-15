@@ -135,6 +135,11 @@ impl EventBus {
         self.pending.remove(hat_id).unwrap_or_default()
     }
 
+    /// Returns a reference to pending events for a hat without consuming them.
+    pub fn peek_pending(&self, hat_id: &HatId) -> Option<&Vec<Event>> {
+        self.pending.get(hat_id)
+    }
+
     /// Checks if there are any pending events for any hat.
     pub fn has_pending(&self) -> bool {
         self.pending.values().any(|events| !events.is_empty())
@@ -317,5 +322,36 @@ mod tests {
         bus.clear_observers();
         bus.publish(Event::new("test", "2"));
         assert_eq!(*count.lock().unwrap(), 1); // Still 1, observers cleared
+    }
+
+    #[test]
+    fn test_peek_pending_does_not_consume() {
+        let mut bus = EventBus::new();
+
+        let hat = Hat::new("impl", "Implementer").subscribe("*");
+        bus.register(hat);
+
+        bus.publish(Event::new("task.start", "Start"));
+        bus.publish(Event::new("task.continue", "Continue"));
+
+        let hat_id = HatId::new("impl");
+
+        // Peek at pending events
+        let peeked = bus.peek_pending(&hat_id);
+        assert!(peeked.is_some());
+        assert_eq!(peeked.unwrap().len(), 2);
+
+        // Peek again - should still be there
+        let peeked_again = bus.peek_pending(&hat_id);
+        assert!(peeked_again.is_some());
+        assert_eq!(peeked_again.unwrap().len(), 2);
+
+        // Now take them - should consume
+        let taken = bus.take_pending(&hat_id);
+        assert_eq!(taken.len(), 2);
+
+        // Peek after take - should be empty
+        let peeked_after_take = bus.peek_pending(&hat_id);
+        assert!(peeked_after_take.is_none() || peeked_after_take.unwrap().is_empty());
     }
 }
