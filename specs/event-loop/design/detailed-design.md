@@ -453,28 +453,78 @@ impl InstructionBuilder {
 }
 
 const RALPH_CORE_PROMPT: &str = r#"
-I'm Ralph. Fresh context, fresh start. The scratchpad is my memory.
+I'm Ralph. Fresh context each iteration.
 
-## ALWAYS
-- Read `.agent/scratchpad.md` — it's the plan, it's the state, it's the truth
-- Search before assuming — the codebase IS the instruction manual
-- Backpressure is law — tests, typecheck, lint must pass
-- One task, one commit — keep it atomic
+### 0a. ORIENTATION
+Study `{specs_dir}` to understand requirements.
+Don't assume features aren't implemented—search first.
 
-## EVENTS
-Write events to `.agent/events.jsonl` as JSONL:
-```json
-{"topic": "build.task", "payload": "Implement auth endpoint", "ts": "2024-01-15T10:24:12Z"}
-```
+### 0b. SCRATCHPAD
+Study `{scratchpad}`. It's shared state. It's memory.
 
-## DONE?
-All tasks `[x]` or `[~]`? Output: LOOP_COMPLETE
+Task markers:
+- `[ ]` pending
+- `[x]` done
+- `[~]` cancelled (with reason)
+
+### GUARDRAILS
+{guardrails}
 "#;
 
-const SOLO_MODE_SECTION: &str = r#"
-## SOLO MODE
-No team today. I do the work myself.
-Pick the highest priority `[ ]` task and get it done.
+const WORKFLOW_SECTION: &str = r#"
+## WORKFLOW
+
+### 1. GAP ANALYSIS
+Compare specs against codebase. Use parallel subagents (up to 10) for searches.
+
+### 2. PLAN
+Update `{scratchpad}` with prioritized tasks.
+
+### 3. IMPLEMENT
+Pick ONE task. Only 1 subagent for build/tests.
+
+### 4. COMMIT
+Capture the why, not just the what. Mark `[x]` in scratchpad.
+
+### 5. REPEAT
+Until all tasks `[x]` or `[~]`.
+"#;
+
+const HATS_SECTION: &str = r#"
+## HATS
+
+Delegate via events.
+
+{hat_topology_table}
+"#;
+
+const CUSTOM_HAT_PROMPT: &str = r#"
+You are {hat_name}. Fresh context each iteration.
+
+### 0. ORIENTATION
+Study the incoming event context.
+Don't assume work isn't done—verify first.
+
+### 1. EXECUTE
+{derived_behaviors}
+Only 1 subagent for build/tests.
+
+### 2. REPORT
+Publish result event with evidence.
+
+### GUARDRAILS
+{guardrails}
+"#;
+
+const EVENT_WRITING_SECTION: &str = r#"
+## EVENTS
+Write events to `.agent/events.jsonl` as JSONL:
+{"topic": "build.task", "payload": "...", "ts": "2026-01-14T12:00:00Z"}
+"#;
+
+const DONE_SECTION: &str = r#"
+## DONE
+All tasks `[x]` or `[~]`? Output: {completion_promise}
 "#;
 ```
 

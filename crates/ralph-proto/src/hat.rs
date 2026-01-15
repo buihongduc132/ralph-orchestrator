@@ -143,6 +143,25 @@ impl Hat {
     pub fn is_subscribed(&self, topic: &Topic) -> bool {
         self.subscriptions.iter().any(|sub| sub.matches(topic))
     }
+
+    /// Checks if this hat has a specific (non-global-wildcard) subscription for the topic.
+    ///
+    /// Returns true if the hat matches via a specific pattern (e.g., `task.*`, `build.done`)
+    /// rather than a global wildcard `*`. Used for routing priority - specific subscriptions
+    /// take precedence over fallback wildcards.
+    pub fn has_specific_subscription(&self, topic: &Topic) -> bool {
+        self.subscriptions
+            .iter()
+            .any(|sub| !sub.is_global_wildcard() && sub.matches(topic))
+    }
+
+    /// Returns true if all subscriptions are global wildcards (`*`).
+    ///
+    /// Used to identify fallback handlers like Ralph.
+    pub fn is_fallback_only(&self) -> bool {
+        !self.subscriptions.is_empty()
+            && self.subscriptions.iter().all(Topic::is_global_wildcard)
+    }
 }
 
 #[cfg(test)]

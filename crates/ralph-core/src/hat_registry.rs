@@ -23,9 +23,9 @@ impl HatRegistry {
     pub fn from_config(config: &RalphConfig) -> Self {
         let mut registry = Self::new();
 
-        for (id, hat_config) in config.get_effective_hats() {
-            let hat = Self::hat_from_config(&id, &hat_config);
-            registry.register_with_config(hat, hat_config);
+        for (id, hat_config) in &config.hats {
+            let hat = Self::hat_from_config(id, hat_config);
+            registry.register_with_config(hat, hat_config.clone());
         }
 
         registry

@@ -1,25 +1,20 @@
 //! Instruction builder for Ralph agent prompts.
 //!
-//! Philosophy: One agent, multiple hats. Ralph switches hats, not personalities:
-//! - Planner hat: Plans work, owns scratchpad, validates completion
-//! - Builder hat: Implements tasks, runs backpressure, commits
-//!
-//! This maps directly to ghuntley's PROMPT_plan.md / PROMPT_build.md split.
+//! Builds ghuntley-style prompts with numbered phases:
+//! - 0a, 0b: Orientation (study specs, study context)
+//! - 1, 2, 3: Workflow phases
+//! - 999+: Guardrails (higher = more important)
 
 use crate::config::{CoreConfig, EventMetadata};
 use ralph_proto::Hat;
 use std::collections::HashMap;
 
-/// Builds the prepended instructions for agent prompts.
+/// Builds instructions for custom hats.
 ///
-/// One agent, two hats: Planner and Builder. Both are Ralph wearing different hats.
-/// The orchestrator routes events to trigger hat changes.
-///
-/// Per spec: "Core behaviors are always present—hats add to them, never replace."
-/// The builder injects core behaviors (scratchpad, specs, guardrails) into every prompt.
+/// Uses ghuntley methodology: numbered phases, specific verbs ("study"),
+/// subagent limits (parallel for reads, single for builds).
 #[derive(Debug)]
 pub struct InstructionBuilder {
-    completion_promise: String,
     core: CoreConfig,
     /// Event metadata for deriving instructions from pub/sub contracts.
     events: HashMap<String, EventMetadata>,
@@ -27,165 +22,22 @@ pub struct InstructionBuilder {
 
 impl InstructionBuilder {
     /// Creates a new instruction builder with core configuration.
-    ///
-    /// The core config provides paths and guardrails that are injected
-    /// into every prompt, per the spec's "Core Behaviors" requirement.
+    #[allow(unused_variables)]
     pub fn new(completion_promise: impl Into<String>, core: CoreConfig) -> Self {
         Self {
-            completion_promise: completion_promise.into(),
             core,
             events: HashMap::new(),
         }
     }
 
     /// Creates a new instruction builder with event metadata for custom hats.
+    #[allow(unused_variables)]
     pub fn with_events(
         completion_promise: impl Into<String>,
         core: CoreConfig,
         events: HashMap<String, EventMetadata>,
     ) -> Self {
-        Self {
-            completion_promise: completion_promise.into(),
-            core,
-            events,
-        }
-    }
-
-    /// Builds the core behaviors section injected into all prompts.
-    ///
-    /// Per spec: "Every Ralph invocation includes these behaviors, regardless of which hat is active."
-    fn build_core_behaviors(&self) -> String {
-        let guardrails = self
-            .core
-            .guardrails
-            .iter()
-            .map(|g| format!("- {g}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        format!(
-            r"## CORE BEHAVIORS
-**Scratchpad:** `{scratchpad}` is shared state. Read it. Update it.
-**Specs:** `{specs_dir}` is the source of truth. Implementations must match.
-
-**IMPORTANT**: Less is more, do the smallest, atomic task possible. Leave work for future workers.
-
-### Guardrails
-{guardrails}
-",
-            scratchpad = self.core.scratchpad,
-            specs_dir = self.core.specs_dir,
-            guardrails = guardrails,
-        )
-    }
-
-    /// Builds Planner instructions (Ralph with planner hat).
-    ///
-    /// Planner owns the scratchpad and decides what work needs doing.
-    /// It does NOT implement—that's the builder hat's job.
-    pub fn build_coordinator(&self, prompt_content: &str) -> String {
-        let core_behaviors = self.build_core_behaviors();
-
-        format!(
-            r#"You are Ralph. You've got your planner hat on.
-
-{core_behaviors}
-
-## PLANNER MODE
-
-You're planning, not building.
-
-1. **Gap analysis.** Compare `{specs_dir}` against codebase. What's missing? Broken?
-
-2. **Own the scratchpad.** Create or update `{scratchpad}` with prioritized tasks.
-   - `[ ]` pending
-   - `[x]` done
-   - `[~]` cancelled (with reason)
-
-3. **Dispatch work.** Publish `<event topic="build.task">` ONE AT A TIME for the highest priority task. Clear acceptance criteria.
-
-4. **Validate.** When build reports done, verify it satisfies the spec.
-
-## DON'T
-
-- ❌ Write implementation code
-- ❌ Run tests or make commits
-- ❌ Pick tasks to implement yourself
-- ❌ Output {promise} until you've created tasks AND they've all been completed
-
-## DONE
-
-**Prerequisites** (ALL must be true before outputting {promise}):
-1. Scratchpad exists with at least one task
-2. You dispatched work to the builder at least once
-3. ALL tasks are marked `[x]` (done) or `[~]` (cancelled)
-4. Specs are satisfied
-
-Only when ALL prerequisites are met, output: {promise}
-
----
-{prompt}"#,
-            core_behaviors = core_behaviors,
-            specs_dir = self.core.specs_dir,
-            scratchpad = self.core.scratchpad,
-            promise = self.completion_promise,
-            prompt = prompt_content
-        )
-    }
-
-    /// Builds Builder instructions (Ralph with builder hat).
-    ///
-    /// Builder implements tasks. It does NOT plan or manage the scratchpad.
-    pub fn build_ralph(&self, prompt_content: &str) -> String {
-        let core_behaviors = self.build_core_behaviors();
-
-        format!(
-            r#"You are Ralph. You've got your builder hat on.
-
-{core_behaviors}
-
-## BUILDER MODE
-
-You're building, not planning. One task, then exit.
-
-1. **Pick ONE task.** Highest priority `[ ]` from `{scratchpad}`.
-   - **Known Issues are HIGH PRIORITY.** Check `ISSUES.md` in the repo root. Fixing known issues takes precedence. Once fixed, remove the issue from `ISSUES.md`.
-
-2. **Implement.** Write the code. Follow existing patterns.
-
-3. **Validate.** Run backpressure. Must pass.
-
-4. **Commit.** One task, one commit. Mark `[x]` in scratchpad.
-
-5. **Exit.** Publish `<event topic="build.done">` with evidence:
-   ```
-   <event topic="build.done">
-   tests: pass
-   lint: pass
-   typecheck: pass
-   </event>
-   ```
-   All three checks must show "pass" or the event will be rejected.
-
-## DON'T
-
-- ❌ Create the scratchpad (planner does that)
-- ❌ Decide what tasks to add (planner does that)
-- ❌ Output the completion promise (planner does that)
-
-## STUCK?
-
-Can't finish? Publish `<event topic="build.blocked">` with:
-- What you tried
-- Why it failed
-- What would unblock you
-
----
-{prompt}"#,
-            core_behaviors = core_behaviors,
-            scratchpad = self.core.scratchpad,
-            prompt = prompt_content
-        )
+        Self { core, events }
     }
 
     /// Derives instructions from a hat's pub/sub contract and event metadata.
@@ -274,10 +126,17 @@ Can't finish? Publish `<event topic="build.blocked">` with:
 
     /// Builds custom hat instructions for extended multi-agent configurations.
     ///
-    /// Use this for teams beyond the default planner + builder hats.
+    /// Use this for hats beyond the default Ralph.
     /// When instructions are empty, derives them from the pub/sub contract.
     pub fn build_custom_hat(&self, hat: &Hat, events_context: &str) -> String {
-        let core_behaviors = self.build_core_behaviors();
+        let guardrails = self
+            .core
+            .guardrails
+            .iter()
+            .enumerate()
+            .map(|(i, g)| format!("{}. {g}", 999 + i))
+            .collect::<Vec<_>>()
+            .join("\n");
 
         let role_instructions = if hat.instructions.is_empty() {
             self.derive_instructions_from_contract(hat)
@@ -295,108 +154,43 @@ Can't finish? Publish `<event topic="build.blocked">` with:
             (
                 format!("You publish to: {}", topics_list),
                 format!(
-                    "\n\n**You MUST publish one of these events based on your task results:** {}\nFailure to publish will terminate the loop.",
+                    "\n\n**You MUST publish one of these events:** {}\nFailure to publish will terminate the loop.",
                     topics_backticked
                 ),
             )
         };
 
         format!(
-            r#"You are {name}. Fresh context each iteration.
+            r"You are {name}. Fresh context each iteration.
 
-{core_behaviors}
+### 0. ORIENTATION
+Study the incoming event context.
+Don't assume work isn't done—verify first.
 
-## YOUR ROLE
-
+### 1. EXECUTE
 {role_instructions}
+Only 1 subagent for build/tests.
 
-## THE RULES
-
-1. **One task, then exit.** The loop continues.
-
-## EVENTS
-
-Communicate via: `<event topic="...">message</event>`
+### 2. REPORT
+Publish result event with evidence.
 {publish_topics}{must_publish}
 
-## COMPLETION
-
-Only Coordinator outputs: {promise}
+### GUARDRAILS
+{guardrails}
 
 ---
 INCOMING:
-{events}"#,
+{events}",
             name = hat.name,
-            core_behaviors = core_behaviors,
             role_instructions = role_instructions,
             publish_topics = publish_topics,
             must_publish = must_publish,
-            promise = self.completion_promise,
+            guardrails = guardrails,
             events = events_context,
         )
     }
 
-    /// Builds Hatless Ralph instructions (coordinator without hats).
-    ///
-    /// Ralph is the constant coordinator that handles events when no hat claims them.
-    /// In solo mode (no hats), Ralph does everything. In multi-hat mode, Ralph coordinates.
-    pub fn build_hatless_ralph(&self, hat_topology: Option<&[(String, Vec<String>, Vec<String>)]>) -> String {
-        let core_behaviors = self.build_core_behaviors();
-        
-        let mode_section = if let Some(topology) = hat_topology {
-            self.build_multi_hat_section(topology)
-        } else {
-            SOLO_MODE_SECTION.to_string()
-        };
-
-        format!(
-            r#"You are Ralph. You're the coordinator.
-
-{core_behaviors}
-{mode_section}
-## EVENT WRITING
-
-Write events to `.agent/events.jsonl` as JSONL:
-{{"topic": "build.task", "payload": "...", "ts": "2026-01-14T12:00:00Z"}}
-
-## DONE
-
-Output {promise} when all tasks complete.
-"#,
-            core_behaviors = core_behaviors,
-            mode_section = mode_section,
-            promise = self.completion_promise,
-        )
-    }
-
-    fn build_multi_hat_section(&self, topology: &[(String, Vec<String>, Vec<String>)]) -> String {
-        let mut section = String::from("## MULTI-HAT MODE\n\nYou coordinate a team. Delegate to hats or handle yourself.\n\n### MY TEAM\n\n");
-        
-        section.push_str("| Hat | Subscribes To | Publishes |\n");
-        section.push_str("|-----|---------------|----------|\n");
-        
-        for (name, subscribes, publishes) in topology {
-            let subscribes_str = subscribes.join(", ");
-            let publishes_str = publishes.join(", ");
-            section.push_str(&format!("| {} | {} | {} |\n", name, subscribes_str, publishes_str));
-        }
-        
-        section.push_str("\n**Your role:** Catch orphaned events, coordinate work, ensure completion.\n\n");
-        section
-    }
 }
-
-const SOLO_MODE_SECTION: &str = r"## SOLO MODE
-
-You're doing everything yourself. Plan, implement, validate.
-
-1. **Gap analysis.** Compare specs against codebase.
-2. **Own the scratchpad.** Create/update with prioritized tasks.
-3. **Implement.** Pick ONE task, write code, validate.
-4. **Commit.** Mark `[x]` in scratchpad.
-5. **Repeat** until all tasks done.
-
-";
 
 #[cfg(test)]
 mod tests {
@@ -407,147 +201,36 @@ mod tests {
     }
 
     #[test]
-    fn test_planner_hat_plans_not_implements() {
-        let builder = default_builder("LOOP_COMPLETE");
-        let instructions = builder.build_coordinator("Build a CLI tool");
-
-        // Identity: Ralph with planner hat
-        assert!(instructions.contains("You are Ralph"));
-        assert!(instructions.contains("planner hat"));
-        assert!(instructions.contains("Build a CLI tool"));
-
-        // Planner mode header per spec
-        assert!(instructions.contains("## PLANNER MODE"));
-        assert!(instructions.contains("planning, not building"));
-
-        // Planner's job (per spec lines 236-263)
-        assert!(instructions.contains("Gap analysis"));
-        assert!(instructions.contains("Own the scratchpad"));
-        assert!(instructions.contains("Dispatch work")); // dispatches build.task events
-        assert!(instructions.contains("build.task")); // publishes build.task
-        assert!(instructions.contains("ONE AT A TIME")); // per spec
-        assert!(instructions.contains("Validate")); // validates completion
-        assert!(instructions.contains("./specs/"));
-
-        // Task markers per spec
-        assert!(instructions.contains("[ ]")); // pending
-        assert!(instructions.contains("[x]")); // done
-        assert!(instructions.contains("[~]")); // cancelled
-
-        // Completion promise (Planner outputs it)
-        assert!(instructions.contains("LOOP_COMPLETE"));
-
-        // What Planner doesn't do
-        assert!(instructions.contains("❌ Write implementation code"));
-        assert!(instructions.contains("❌ Run tests or make commits"));
-        assert!(instructions.contains("❌ Pick tasks to implement yourself"));
-
-        // Guards against premature completion (vacuous truth prevention)
-        assert!(instructions.contains("Prerequisites"));
-        assert!(instructions.contains("Scratchpad exists with at least one task"));
-        assert!(instructions.contains("dispatched work to the builder at least once"));
-    }
-
-    #[test]
-    fn test_builder_hat_implements_not_plans() {
-        let builder = default_builder("LOOP_COMPLETE");
-        let instructions = builder.build_ralph("Build a CLI tool");
-
-        // Identity: Ralph with builder hat
-        assert!(instructions.contains("You are Ralph"));
-        assert!(instructions.contains("builder hat"));
-        assert!(instructions.contains("Build a CLI tool"));
-
-        // Builder mode header per spec
-        assert!(instructions.contains("## BUILDER MODE"));
-        assert!(instructions.contains("building, not planning"));
-
-        // Builder's job (per spec lines 266-294)
-        assert!(instructions.contains("Pick ONE task"));
-        assert!(instructions.contains("Known Issues are HIGH PRIORITY")); // fixes known issues first
-        assert!(instructions.contains("ISSUES.md")); // centralized issue tracking
-        assert!(instructions.contains("remove the issue from")); // cleans up after fix
-        assert!(instructions.contains("Implement"));
-        assert!(instructions.contains("Validate")); // step 3 per spec
-        assert!(instructions.contains("backpressure")); // must run backpressure
-        assert!(instructions.contains("Commit")); // step 4
-        assert!(instructions.contains("Exit")); // step 5
-        assert!(instructions.contains("build.done")); // publishes build.done
-
-        // What Builder doesn't do - references planner, not Coordinator
-        assert!(instructions.contains("❌ Create the scratchpad (planner does that)"));
-        assert!(instructions.contains("❌ Decide what tasks to add (planner does that)"));
-        assert!(instructions.contains("❌ Output the completion promise (planner does that)"));
-
-        // STUCK section for build.blocked events
-        assert!(instructions.contains("## STUCK?"));
-        assert!(instructions.contains("build.blocked"));
-
-        // Should NOT contain completion promise in output
-        assert!(!instructions.contains("LOOP_COMPLETE"));
-    }
-
-    #[test]
-    fn test_coordinator_and_ralph_share_guardrails() {
-        let builder = default_builder("DONE");
-        let coordinator = builder.build_coordinator("test");
-        let ralph = builder.build_ralph("test");
-
-        // Both reference the scratchpad (from CoreConfig)
-        assert!(coordinator.contains(".agent/scratchpad.md"));
-        assert!(ralph.contains(".agent/scratchpad.md"));
-
-        // Both include default guardrails
-        assert!(coordinator.contains("search first"));
-        assert!(ralph.contains("search first"));
-        assert!(coordinator.contains("Backpressure"));
-        assert!(ralph.contains("Backpressure"));
-
-        // Both use task markers
-        assert!(coordinator.contains("[x]"));
-        assert!(ralph.contains("[x]"));
-        assert!(coordinator.contains("[~]"));
-    }
-
-    #[test]
-    fn test_separation_of_concerns() {
-        let builder = default_builder("DONE");
-        let planner = builder.build_coordinator("test");
-        let builder_hat = builder.build_ralph("test");
-
-        // Planner does planning, not implementation
-        assert!(planner.contains("Gap analysis"));
-        assert!(planner.contains("PLANNER MODE"));
-        assert!(!planner.contains("BUILDER MODE"));
-
-        // Builder does implementation, not planning
-        assert!(builder_hat.contains("BUILDER MODE"));
-        assert!(!builder_hat.contains("Gap analysis"));
-
-        // Only Planner outputs completion promise
-        assert!(planner.contains("output: DONE"));
-        assert!(!builder_hat.contains("output: DONE"));
-    }
-
-    #[test]
-    fn test_custom_hat_for_extended_teams() {
+    fn test_custom_hat_with_ghuntley_patterns() {
         let builder = default_builder("DONE");
         let hat = Hat::new("reviewer", "Code Reviewer")
             .with_instructions("Review PRs for quality and correctness.");
 
         let instructions = builder.build_custom_hat(&hat, "PR #123 ready for review");
 
-        // Custom role
+        // Custom role with ghuntley style identity
         assert!(instructions.contains("Code Reviewer"));
+        assert!(instructions.contains("Fresh context each iteration"));
+
+        // Numbered orientation phase
+        assert!(instructions.contains("### 0. ORIENTATION"));
+        assert!(instructions.contains("Study the incoming event context"));
+        assert!(instructions.contains("Don't assume work isn't done"));
+
+        // Numbered execute phase
+        assert!(instructions.contains("### 1. EXECUTE"));
         assert!(instructions.contains("Review PRs for quality"));
+        assert!(instructions.contains("Only 1 subagent for build/tests"));
 
-        // Events
+        // Report phase
+        assert!(instructions.contains("### 2. REPORT"));
+
+        // Guardrails section with high numbers
+        assert!(instructions.contains("### GUARDRAILS"));
+        assert!(instructions.contains("999."));
+
+        // Event context is included
         assert!(instructions.contains("PR #123 ready for review"));
-        assert!(instructions.contains("<event topic="));
-
-        // Core behaviors are injected
-        assert!(instructions.contains("CORE BEHAVIORS"));
-        assert!(instructions.contains(".agent/scratchpad.md"));
     }
 
     #[test]
@@ -562,21 +245,12 @@ mod tests {
         };
         let builder = InstructionBuilder::new("DONE", custom_core);
 
-        let coordinator = builder.build_coordinator("test");
-        let ralph = builder.build_ralph("test");
+        let hat = Hat::new("worker", "Worker").with_instructions("Do the work.");
+        let instructions = builder.build_custom_hat(&hat, "context");
 
-        // Custom scratchpad path is used
-        assert!(coordinator.contains(".workspace/plan.md"));
-        assert!(ralph.contains(".workspace/plan.md"));
-
-        // Custom specs dir is used
-        assert!(coordinator.contains("./specifications/"));
-
-        // Custom guardrails are injected
-        assert!(coordinator.contains("Custom rule one"));
-        assert!(coordinator.contains("Custom rule two"));
-        assert!(ralph.contains("Custom rule one"));
-        assert!(ralph.contains("Custom rule two"));
+        // Custom guardrails are injected with 999+ numbering
+        assert!(instructions.contains("999. Custom rule one"));
+        assert!(instructions.contains("1000. Custom rule two"));
     }
 
     #[test]
@@ -619,90 +293,18 @@ mod tests {
     }
 
     #[test]
-    fn test_hatless_ralph_solo_mode() {
-        let builder = default_builder("LOOP_COMPLETE");
-        let prompt = builder.build_hatless_ralph(None);
+    fn test_derived_behaviors_when_no_explicit_instructions() {
+        use ralph_proto::Topic;
 
-        // Identity
-        assert!(prompt.contains("You are Ralph. You're the coordinator."));
-
-        // Core behaviors
-        assert!(prompt.contains("## CORE BEHAVIORS"));
-        assert!(prompt.contains("**Scratchpad:**"));
-        assert!(prompt.contains("**Specs:**"));
-        assert!(prompt.contains("### Guardrails"));
-
-        // Solo mode section
-        assert!(prompt.contains("## SOLO MODE"));
-        assert!(prompt.contains("You're doing everything yourself"));
-        assert!(prompt.contains("Gap analysis"));
-        assert!(prompt.contains("Own the scratchpad"));
-        assert!(prompt.contains("Implement"));
-        assert!(prompt.contains("Commit"));
-        assert!(prompt.contains("Repeat"));
-
-        // Event writing
-        assert!(prompt.contains("## EVENT WRITING"));
-        assert!(prompt.contains(".agent/events.jsonl"));
-        assert!(prompt.contains("JSONL"));
-
-        // Completion
-        assert!(prompt.contains("## DONE"));
-        assert!(prompt.contains("LOOP_COMPLETE"));
-
-        // Should NOT have multi-hat section
-        assert!(!prompt.contains("## MULTI-HAT MODE"));
-    }
-
-    #[test]
-    fn test_hatless_ralph_multi_hat_mode() {
-        let builder = default_builder("LOOP_COMPLETE");
-        let topology = vec![
-            (
-                "Planner".to_string(),
-                vec!["task.start".to_string(), "build.done".to_string()],
-                vec!["build.task".to_string()],
-            ),
-            (
-                "Builder".to_string(),
-                vec!["build.task".to_string()],
-                vec!["build.done".to_string(), "build.blocked".to_string()],
-            ),
-        ];
-        let prompt = builder.build_hatless_ralph(Some(&topology));
-
-        // Identity
-        assert!(prompt.contains("You are Ralph. You're the coordinator."));
-
-        // Core behaviors
-        assert!(prompt.contains("## CORE BEHAVIORS"));
-
-        // Multi-hat mode section
-        assert!(prompt.contains("## MULTI-HAT MODE"));
-        assert!(prompt.contains("You coordinate a team"));
-        assert!(prompt.contains("### MY TEAM"));
-        assert!(prompt.contains("| Hat | Subscribes To | Publishes |"));
-        assert!(prompt.contains("| Planner | task.start, build.done | build.task |"));
-        assert!(prompt.contains("| Builder | build.task | build.done, build.blocked |"));
-        assert!(prompt.contains("Catch orphaned events"));
-
-        // Event writing
-        assert!(prompt.contains("## EVENT WRITING"));
-
-        // Completion
-        assert!(prompt.contains("LOOP_COMPLETE"));
-
-        // Should NOT have solo mode section
-        assert!(!prompt.contains("## SOLO MODE"));
-    }
-
-    #[test]
-    fn test_hatless_ralph_includes_event_writing_instructions() {
         let builder = default_builder("DONE");
-        let prompt = builder.build_hatless_ralph(None);
+        let hat = Hat::new("builder", "Builder")
+            .subscribe("build.task")
+            .with_publishes(vec![Topic::new("build.done"), Topic::new("build.blocked")]);
 
-        // JSONL format instructions
-        assert!(prompt.contains("Write events to `.agent/events.jsonl`"));
-        assert!(prompt.contains(r#"{"topic": "build.task", "payload": "...", "ts": "2026-01-14T12:00:00Z"}"#));
+        let instructions = builder.build_custom_hat(&hat, "Implement feature X");
+
+        // Should derive behaviors from pub/sub contract
+        assert!(instructions.contains("Derived Behaviors"));
+        assert!(instructions.contains("build.task"));
     }
 }

@@ -15,6 +15,7 @@ use tracing::debug;
 /// - v1: `agent: claude`, `max_iterations: 100`
 /// - v2: `cli: { backend: claude }`, `event_loop: { max_iterations: 100 }`
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)] // Configuration struct with multiple feature flags
 pub struct RalphConfig {
     /// Event loop configuration (v2 nested style).
     #[serde(default)]
@@ -53,7 +54,7 @@ pub struct RalphConfig {
     #[serde(default)]
     pub agent_priority: Vec<String>,
 
-    /// V1 field: Path to prompt file (maps to event_loop.prompt_file).
+    /// V1 field: Path to prompt file (maps to `event_loop.prompt_file`).
     #[serde(default)]
     pub prompt_file: Option<String>,
 
@@ -122,6 +123,7 @@ fn default_true() -> bool {
     true
 }
 
+#[allow(clippy::derivable_impls)] // Cannot derive due to serde default functions
 impl Default for RalphConfig {
     fn default() -> Self {
         Self {
@@ -305,7 +307,7 @@ impl RalphConfig {
         }
 
         // Check custom backend has a command
-        if self.cli.backend == "custom" && (self.cli.command.is_none() || self.cli.command.as_ref().map_or(true, |c| c.is_empty())) {
+        if self.cli.backend == "custom" && self.cli.command.as_ref().is_none_or(String::is_empty) {
             return Err(ConfigError::CustomBackendRequiresCommand);
         }
 
@@ -360,7 +362,7 @@ impl RalphConfig {
                     if let Some(existing_hat) = trigger_to_hat.get(trigger.as_str()) {
                         return Err(ConfigError::AmbiguousRouting {
                             trigger: trigger.clone(),
-                            hat1: existing_hat.to_string(),
+                            hat1: (*existing_hat).to_string(),
                             hat2: hat_id.clone(),
                         });
                     }
@@ -377,159 +379,18 @@ impl RalphConfig {
         &self.cli.backend
     }
 
-    /// Performs preflight validation to catch issues before the loop starts.
-    ///
-    /// This validates:
-    /// - Event flow graph integrity (no dead-end events)
-    /// - Path existence (scratchpad parent dir, specs dir)
-    ///
-    /// Returns a list of errors (fatal) and warnings (informational).
-    pub fn preflight_check(&self) -> (Vec<PreflightError>, Vec<PreflightWarning>) {
-        let mut errors = Vec::new();
-        let mut warnings = Vec::new();
-
-        // Build effective hat configs (use defaults if none configured)
-        let effective_hats = self.get_effective_hats();
-
-        // Check 1: At least one hat must exist
-        if effective_hats.is_empty() {
-            errors.push(PreflightError::NoHatsConfigured);
-            return (errors, warnings);
-        }
-
-        // Build trigger and publish maps for event flow analysis
-        let mut all_triggers: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        let mut all_publishes: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
-
-        for (hat_id, hat_config) in &effective_hats {
-            for trigger in &hat_config.triggers {
-                all_triggers.insert(trigger.as_str());
-            }
-            for publish in &hat_config.publishes {
-                all_publishes.entry(publish.as_str()).or_default().push(hat_id.as_str());
-            }
-            // Check for hats that never publish (warning, not error)
-            if hat_config.publishes.is_empty() {
-                warnings.push(PreflightWarning::HatNeverPublishes {
-                    hat: hat_id.clone(),
-                });
-            }
-        }
-
-        // Check 2: Initial events must have handlers
-        for initial_event in &["task.start", "task.resume"] {
-            if !all_triggers.contains(initial_event) {
-                // Check if any hat would handle these (skip if not relevant to this config)
-                let is_relevant = effective_hats.values().any(|h| {
-                    h.triggers.iter().any(|t| t == "task.start" || t == "task.resume")
-                });
-                if !is_relevant && *initial_event == "task.start" {
-                    errors.push(PreflightError::NoInitialHandler {
-                        event: initial_event.to_string(),
-                    });
-                }
-            }
-        }
-
-        // Check 3: Every published event must have a subscriber (except LOOP_COMPLETE)
-        for (event, publishers) in &all_publishes {
-            if *event == "LOOP_COMPLETE" || *event == self.event_loop.completion_promise.as_str() {
-                continue; // Terminal event, no subscriber needed
-            }
-            if !all_triggers.contains(event) {
-                for publisher in publishers {
-                    errors.push(PreflightError::UnhandledEvent {
-                        event: event.to_string(),
-                        publisher: publisher.to_string(),
-                    });
-                }
-            }
-        }
-
-        // Check 4: Path validation
-        // Scratchpad parent directory should exist (or be creatable)
-        let scratchpad_path = Path::new(&self.core.scratchpad);
-        if let Some(parent) = scratchpad_path.parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
-                errors.push(PreflightError::PathNotFound {
-                    path: parent.display().to_string(),
-                    purpose: "scratchpad parent directory".to_string(),
-                });
-            }
-        }
-
-        // Specs directory should exist if referenced
-        if !self.core.specs_dir.is_empty() {
-            let specs_path = Path::new(&self.core.specs_dir);
-            if !specs_path.exists() {
-                // Warning, not error - planner may create it
-                debug!("Specs directory '{}' does not exist yet", self.core.specs_dir);
-            }
-        }
-
-        // Check 6: Custom events should have metadata defined
-        // Well-known events have built-in defaults, custom events need metadata
-        let well_known_events: std::collections::HashSet<&str> = [
-            "task.start", "task.resume",
-            "build.task", "build.done", "build.blocked",
-            "review.request", "review.approved", "review.changes_requested",
-            "LOOP_COMPLETE",
-        ].into_iter().collect();
-
-        for (hat_id, hat_config) in &effective_hats {
-            // Skip if hat has explicit instructions
-            if !hat_config.instructions.is_empty() {
-                continue;
-            }
-
-            // Check triggers
-            for trigger in &hat_config.triggers {
-                if !well_known_events.contains(trigger.as_str())
-                    && !self.events.contains_key(trigger)
-                {
-                    warnings.push(PreflightWarning::UndefinedEventMetadata {
-                        event: trigger.clone(),
-                        hat: hat_id.clone(),
-                        usage: "trigger".to_string(),
-                    });
-                }
-            }
-
-            // Check publishes
-            for publish in &hat_config.publishes {
-                if !well_known_events.contains(publish.as_str())
-                    && !self.events.contains_key(publish)
-                    && publish != &self.event_loop.completion_promise
-                {
-                    warnings.push(PreflightWarning::UndefinedEventMetadata {
-                        event: publish.clone(),
-                        hat: hat_id.clone(),
-                        usage: "publish".to_string(),
-                    });
-                }
-            }
-        }
-
-        (errors, warnings)
-    }
-
-    /// Returns hat configurations from config.
-    /// Empty config → empty hats (HatlessRalph is the fallback, not default hats).
-    pub(crate) fn get_effective_hats(&self) -> HashMap<String, HatConfig> {
-        self.hats.clone()
-    }
-
     /// Returns the agent priority list for auto-detection.
     /// If empty, returns the default priority order.
     pub fn get_agent_priority(&self) -> Vec<&str> {
         if self.agent_priority.is_empty() {
             vec!["claude", "kiro", "gemini", "codex", "amp"]
         } else {
-            self.agent_priority.iter().map(|s| s.as_str()).collect()
+            self.agent_priority.iter().map(String::as_str).collect()
         }
     }
 
     /// Gets the adapter settings for a specific backend.
+    #[allow(clippy::match_same_arms)] // Explicit match arms for each backend improves readability
     pub fn adapter_settings(&self, backend: &str) -> &AdapterSettings {
         match backend {
             "claude" => &self.adapters.claude,
@@ -554,16 +415,15 @@ pub enum ConfigWarning {
 }
 
 impl std::fmt::Display for ConfigWarning {
+    #[allow(clippy::match_same_arms)] // Different arms have different messages despite similar structure
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConfigWarning::DeferredFeature { field, message } => {
-                write!(f, "Warning [{}]: {}", field, message)
+            ConfigWarning::DeferredFeature { field, message }
+            | ConfigWarning::InvalidValue { field, message } => {
+                write!(f, "Warning [{field}]: {message}")
             }
             ConfigWarning::DroppedField { field, reason } => {
-                write!(f, "Warning [{}]: Field ignored - {}", field, reason)
-            }
-            ConfigWarning::InvalidValue { field, message } => {
-                write!(f, "Warning [{}]: {}", field, message)
+                write!(f, "Warning [{field}]: Field ignored - {reason}")
             }
         }
     }
@@ -930,98 +790,6 @@ pub enum ConfigError {
 
     #[error("Custom backend requires a command - set 'cli.command' in config")]
     CustomBackendRequiresCommand,
-}
-
-/// Errors that occur during preflight validation.
-/// These are issues that would cause the loop to fail or terminate unexpectedly.
-#[derive(Debug, Clone)]
-pub enum PreflightError {
-    /// No hats are configured - the loop would have nothing to execute.
-    NoHatsConfigured,
-    /// A published event has no subscribers (dead end in event flow).
-    UnhandledEvent {
-        event: String,
-        publisher: String,
-    },
-    /// The initial event has no handler.
-    NoInitialHandler {
-        event: String,
-    },
-    /// A required path doesn't exist.
-    PathNotFound {
-        path: String,
-        purpose: String,
-    },
-    /// A path exists but is not writable.
-    PathNotWritable {
-        path: String,
-        purpose: String,
-    },
-}
-
-impl std::fmt::Display for PreflightError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PreflightError::NoHatsConfigured => {
-                write!(f, "No hats configured. The event loop needs at least one hat to execute.")
-            }
-            PreflightError::UnhandledEvent { event, publisher } => {
-                write!(f, "Event '{event}' published by '{publisher}' has no subscriber. This would cause the loop to terminate unexpectedly.")
-            }
-            PreflightError::NoInitialHandler { event } => {
-                write!(f, "Initial event '{event}' has no handler. No hat is subscribed to receive it.")
-            }
-            PreflightError::PathNotFound { path, purpose } => {
-                write!(f, "Required path not found: '{path}' ({purpose})")
-            }
-            PreflightError::PathNotWritable { path, purpose } => {
-                write!(f, "Path not writable: '{path}' ({purpose})")
-            }
-        }
-    }
-}
-
-impl std::error::Error for PreflightError {}
-
-/// Warnings that occur during preflight validation.
-/// These are potential issues that may cause problems but aren't fatal.
-#[derive(Debug, Clone)]
-pub enum PreflightWarning {
-    /// A hat never publishes any events (may be intentional for terminal hats).
-    HatNeverPublishes {
-        hat: String,
-    },
-    /// An event is subscribed to but never published.
-    EventNeverPublished {
-        event: String,
-        subscriber: String,
-    },
-    /// A custom event has no metadata defined (may cause missing instructions).
-    UndefinedEventMetadata {
-        event: String,
-        hat: String,
-        usage: String, // "trigger" or "publish"
-    },
-}
-
-impl std::fmt::Display for PreflightWarning {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PreflightWarning::HatNeverPublishes { hat } => {
-                write!(f, "Hat '{}' never publishes any events", hat)
-            }
-            PreflightWarning::EventNeverPublished { event, subscriber } => {
-                write!(f, "Event '{}' is subscribed to by '{}' but never published", event, subscriber)
-            }
-            PreflightWarning::UndefinedEventMetadata { event, hat, usage } => {
-                write!(
-                    f,
-                    "Custom event '{}' used as {} by '{}' has no metadata. Add to 'events:' config or provide explicit instructions.",
-                    event, usage, hat
-                )
-            }
-        }
-    }
 }
 
 #[cfg(test)]

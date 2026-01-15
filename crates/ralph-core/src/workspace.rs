@@ -54,6 +54,7 @@ pub enum CleanupPolicy {
 
 impl CleanupPolicy {
     /// Parse from string representation.
+    #[allow(clippy::match_same_arms)] // Explicit "on_success" arm for clarity
     pub fn from_str(s: &str, keep_last_n: Option<usize>) -> Self {
         match s.to_lowercase().as_str() {
             "rotate" => CleanupPolicy::Rotate(keep_last_n.unwrap_or(5)),

@@ -5,7 +5,7 @@
 
 use crate::cli_backend::CliBackend;
 #[cfg(test)]
-use crate::cli_backend::PromptMode;
+use crate::cli_backend::{OutputFormat, PromptMode};
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use std::io::Write;
@@ -197,6 +197,7 @@ mod tests {
             args: vec![],
             prompt_mode: PromptMode::Arg,
             prompt_flag: None,
+            output_format: OutputFormat::Text,
         };
 
         let executor = CliExecutor::new(backend);
@@ -217,6 +218,7 @@ mod tests {
             args: vec![],
             prompt_mode: PromptMode::Stdin,
             prompt_flag: None,
+            output_format: OutputFormat::Text,
         };
 
         let executor = CliExecutor::new(backend);
@@ -233,6 +235,7 @@ mod tests {
             args: vec![],
             prompt_mode: PromptMode::Arg,
             prompt_flag: None,
+            output_format: OutputFormat::Text,
         };
 
         let executor = CliExecutor::new(backend);
@@ -253,6 +256,7 @@ mod tests {
             args: vec!["10".to_string()], // Sleep for 10 seconds
             prompt_mode: PromptMode::Stdin, // Use stdin mode so prompt doesn't interfere
             prompt_flag: None,
+            output_format: OutputFormat::Text,
         };
 
         let executor = CliExecutor::new(backend);
@@ -273,6 +277,7 @@ mod tests {
             args: vec![],
             prompt_mode: PromptMode::Arg,
             prompt_flag: None,
+            output_format: OutputFormat::Text,
         };
 
         let executor = CliExecutor::new(backend);

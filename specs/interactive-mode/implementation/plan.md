@@ -2,20 +2,20 @@
 
 ## Implementation Checklist
 
-- [ ] Step 1: Add tui-term dependency and basic TerminalWidget
-- [ ] Step 2: Implement PtyHandle abstraction
-- [ ] Step 3: Wire TerminalWidget to PTY output
-- [ ] Step 4: Implement InputRouter with prefix detection
-- [ ] Step 5: Add basic prefix commands (quit, help)
-- [ ] Step 6: Implement pause/resume loop control
-- [ ] Step 7: Implement skip and abort commands
-- [ ] Step 8: Add scroll mode with navigation
-- [ ] Step 9: Implement search in scroll mode
-- [ ] Step 10: Handle iteration boundaries (clear screen)
-- [ ] Step 11: Update header with new fields (idle, mode)
-- [ ] Step 12: Add TUI configuration to ralph.yml
-- [ ] Step 13: Deprecate --tui flag, update -i behavior
-- [ ] Step 14: Integration testing and polish
+- [x] Step 1: Add tui-term dependency and basic TerminalWidget
+- [x] Step 2: Implement PtyHandle abstraction
+- [x] Step 3: Wire TerminalWidget to PTY output
+- [x] Step 4: Implement InputRouter with prefix detection
+- [x] Step 5: Add basic prefix commands (quit, help)
+- [x] Step 6: Implement pause/resume loop control
+- [x] Step 7: Implement skip and abort commands
+- [x] Step 8: Add scroll mode with navigation
+- [x] Step 9: Implement search in scroll mode
+- [x] Step 10: Handle iteration boundaries (clear screen)
+- [x] Step 11: Update header with new fields (idle, mode)
+- [x] Step 12: Add TUI configuration to ralph.yml
+- [x] Step 13: Deprecate --tui flag, update -i behavior
+- [x] Step 14: Integration testing and polish
 
 ---
 

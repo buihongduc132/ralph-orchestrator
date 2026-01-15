@@ -79,15 +79,37 @@ impl EventBus {
             return recipients;
         }
 
-        // Otherwise, route to all subscribers
+        // Route with priority: specific subscriptions > fallback wildcards
+        // Per spec: "If event has subscriber → Select that hat's backend"
+        //           "If no subscriber → Select Ralph's backend (cli.backend)"
+
+        // First, find hats with specific (non-global-wildcard) subscriptions
+        let mut specific_recipients = Vec::new();
+        let mut fallback_recipients = Vec::new();
+
         for (id, hat) in &self.hats {
-            if hat.is_subscribed(&event.topic) {
-                self.pending
-                    .entry(id.clone())
-                    .or_default()
-                    .push(event.clone());
-                recipients.push(id.clone());
+            if hat.has_specific_subscription(&event.topic) {
+                // Hat has a specific subscription for this topic
+                specific_recipients.push(id.clone());
+            } else if hat.is_subscribed(&event.topic) {
+                // Hat matches only via global wildcard (fallback)
+                fallback_recipients.push(id.clone());
             }
+        }
+
+        // Use specific subscribers if any, otherwise fall back to wildcard handlers
+        let chosen_recipients = if specific_recipients.is_empty() {
+            fallback_recipients
+        } else {
+            specific_recipients
+        };
+
+        for id in chosen_recipients {
+            self.pending
+                .entry(id.clone())
+                .or_default()
+                .push(event.clone());
+            recipients.push(id);
         }
 
         recipients

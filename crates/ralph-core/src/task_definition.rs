@@ -383,25 +383,17 @@ impl TaskDefinitionBuilder {
 }
 
 /// Verification configuration for a task.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Verification {
     /// Bash command to verify task success.
     ///
     /// Runs in the task workspace after completion promise is detected.
+    #[serde(default)]
     pub command: String,
 
     /// Exit code that indicates success (default: 0).
     #[serde(default)]
     pub success_exit_code: i32,
-}
-
-impl Default for Verification {
-    fn default() -> Self {
-        Self {
-            command: String::new(),
-            success_exit_code: 0,
-        }
-    }
 }
 
 impl Verification {

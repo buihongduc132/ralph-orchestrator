@@ -152,8 +152,27 @@ impl EventLoop {
         );
 
         let mut bus = EventBus::new();
+
+        // Per spec: "Hatless Ralph is constant — Cannot be replaced, overwritten, or configured away"
+        // Ralph is ALWAYS registered as the universal fallback for orphaned events.
+        // Custom hats are registered first (higher priority), Ralph catches everything else.
         for hat in registry.all() {
             bus.register(hat.clone());
+        }
+
+        // Always register Ralph as catch-all coordinator
+        // Per spec: "Ralph runs when no hat triggered — Universal fallback for orphaned events"
+        let ralph_hat = ralph_proto::Hat::new("ralph", "Ralph")
+            .subscribe("*"); // Subscribe to all events
+        bus.register(ralph_hat);
+
+        if registry.is_empty() {
+            debug!("Solo mode: Ralph is the only coordinator");
+        } else {
+            debug!(
+                "Multi-hat mode: {} custom hats + Ralph as fallback",
+                registry.len()
+            );
         }
 
         let ralph = HatlessRalph::new(
@@ -309,10 +328,9 @@ impl EventLoop {
     ///
     /// Per spec: Default hats (planner/builder) use specialized rich prompts
     /// from `InstructionBuilder`. Custom hats use `build_custom_hat()` with
-    /// their configured instructions.
+    /// their configured instructions. In hatless mode, "ralph" uses HatlessRalph's
+    /// solo mode prompt.
     pub fn build_prompt(&mut self, hat_id: &HatId) -> Option<String> {
-        let hat = self.registry.get(hat_id)?;
-
         let events = self.bus.take_pending(&hat_id.clone());
         let events_context = events
             .iter()
@@ -320,45 +338,32 @@ impl EventLoop {
             .collect::<Vec<_>>()
             .join("\n");
 
+        // Handle "ralph" hat specially - Ralph is always present as the coordinator
+        // Per spec: "Hatless Ralph is constant — Cannot be replaced, overwritten, or configured away"
+        if hat_id.as_str() == "ralph" {
+            let mode = if self.registry.is_empty() { "solo" } else { "multi-hat fallback" };
+            debug!("build_prompt: routing to HatlessRalph ({} mode)", mode);
+            return Some(self.ralph.build_prompt(&events_context));
+        }
+
+        let hat = self.registry.get(hat_id)?;
+
         // Debug logging to trace hat routing
-        debug!("build_prompt: hat_id='{}', instructions.is_empty()={}", 
+        debug!("build_prompt: hat_id='{}', instructions.is_empty()={}",
                hat_id.as_str(), hat.instructions.is_empty());
 
-        // Default planner and builder hats use specialized prompts per spec
-        // Custom hats (or defaults with custom instructions) use build_custom_hat
-        // If a hat has non-default publishes, use derived instructions to ensure
-        // all events are properly documented (e.g., planner with review.request)
-        let is_default_planner = hat.instructions.is_empty()
-            && hat.publishes.len() == 1
-            && hat.publishes.iter().any(|t| t.as_str() == "build.task");
-        let is_default_builder = hat.instructions.is_empty()
-            && hat.publishes.len() == 2
-            && hat.publishes.iter().any(|t| t.as_str() == "build.done")
-            && hat.publishes.iter().any(|t| t.as_str() == "build.blocked");
-
-        match hat_id.as_str() {
-            "planner" if is_default_planner => {
-                debug!("build_prompt: routing to build_coordinator() for default planner");
-                Some(self.instruction_builder.build_coordinator(&events_context))
-            }
-            "builder" if is_default_builder => {
-                debug!("build_prompt: routing to build_ralph() for default builder");
-                Some(self.instruction_builder.build_ralph(&events_context))
-            }
-            _ => {
-                // Custom hats, or default hats with extended pub/sub, use derived instructions
-                debug!("build_prompt: routing to build_custom_hat() for '{}'", hat_id.as_str());
-                Some(self.instruction_builder.build_custom_hat(hat, &events_context))
-            }
-        }
+        // All hats use build_custom_hat with ghuntley-style prompts
+        debug!(
+            "build_prompt: routing to build_custom_hat() for '{}'",
+            hat_id.as_str()
+        );
+        Some(
+            self.instruction_builder
+                .build_custom_hat(hat, &events_context),
+        )
     }
 
-    /// Builds the Coordinator prompt (planning mode).
-    pub fn build_coordinator_prompt(&self, prompt_content: &str) -> String {
-        self.instruction_builder.build_coordinator(prompt_content)
-    }
-
-    /// Builds the Ralph prompt (build mode).
+    /// Builds the Ralph prompt (coordination mode).
     pub fn build_ralph_prompt(&self, prompt_content: &str) -> String {
         self.ralph.build_prompt(prompt_content)
     }
@@ -436,13 +441,12 @@ impl EventLoop {
                             "Completion confirmed on consecutive iterations - terminating"
                         );
                         return Some(TerminationReason::CompletionPromise);
-                    } else {
-                        // First confirmation - continue to next iteration
-                        info!(
-                            confirmations = self.state.completion_confirmations,
-                            "Completion detected but requires consecutive confirmation - continuing"
-                        );
                     }
+                    // First confirmation - continue to next iteration
+                    info!(
+                        confirmations = self.state.completion_confirmations,
+                        "Completion detected but requires consecutive confirmation - continuing"
+                    );
                 }
                 Ok(false) => {
                     // Pending tasks exist - reject completion
@@ -842,8 +846,8 @@ event_loop:
     }
 
     #[test]
-    fn test_build_prompt_uses_specialized_prompts_for_default_hats() {
-        // Per spec: Default planner and builder hats use specialized rich prompts
+    fn test_build_prompt_uses_ghuntley_style_for_all_hats() {
+        // Per Hatless Ralph spec: All hats use build_custom_hat with ghuntley-style prompts
         let yaml = r#"
 hats:
   planner:
@@ -859,35 +863,38 @@ hats:
         let mut event_loop = EventLoop::new(config);
         event_loop.initialize("Test task");
 
-        // Planner hat should get specialized planner prompt
+        // Planner hat should get ghuntley-style prompt via build_custom_hat
         let planner_id = HatId::new("planner");
         let planner_prompt = event_loop.build_prompt(&planner_id).unwrap();
 
-        // Verify it's the Coordinator/Planner prompt (has PLANNER MODE header)
+        // Verify ghuntley-style structure (numbered phases, guardrails)
         assert!(
-            planner_prompt.contains("PLANNER MODE"),
-            "Planner should use specialized planner prompt"
+            planner_prompt.contains("### 0. ORIENTATION"),
+            "Planner should use ghuntley-style orientation phase"
         );
         assert!(
-            planner_prompt.contains("planning, not building"),
-            "Planner prompt should have planning instructions"
+            planner_prompt.contains("### GUARDRAILS"),
+            "Planner prompt should have guardrails section"
+        );
+        assert!(
+            planner_prompt.contains("Fresh context each iteration"),
+            "Planner prompt should have ghuntley identity"
         );
 
         // Now trigger builder hat by publishing build.task event
         let hat_id = HatId::new("builder");
-        // We need to trigger the builder to have pending events
         event_loop.bus.publish(Event::new("build.task", "Build something"));
 
         let builder_prompt = event_loop.build_prompt(&hat_id).unwrap();
 
-        // Verify it's the Builder/Ralph prompt (has BUILDER MODE header)
+        // Verify ghuntley-style structure for builder too
         assert!(
-            builder_prompt.contains("BUILDER MODE"),
-            "Builder should use specialized builder prompt"
+            builder_prompt.contains("### 0. ORIENTATION"),
+            "Builder should use ghuntley-style orientation phase"
         );
         assert!(
-            builder_prompt.contains("building, not planning"),
-            "Builder prompt should have building instructions"
+            builder_prompt.contains("Only 1 subagent for build/tests"),
+            "Builder prompt should have subagent limit"
         );
     }
 
@@ -1041,15 +1048,15 @@ hats:
         let reviewer_id = HatId::new("reviewer");
         let prompt = event_loop.build_prompt(&reviewer_id).unwrap();
 
-        // Should use build_custom_hat() - verify by checking for custom hat structure
+        // Should use build_custom_hat() - verify by checking for ghuntley-style structure
         assert!(prompt.contains("Code Reviewer"), "Should include custom hat name");
         assert!(prompt.contains("Review code for quality and security issues"), "Should include custom instructions");
-        assert!(prompt.contains("CORE BEHAVIORS"), "Should include core behaviors from build_custom_hat");
-        assert!(prompt.contains("YOUR ROLE"), "Should use custom hat template");
-        
-        // Should NOT use default planner/builder templates
-        assert!(!prompt.contains("PLANNER MODE"), "Should not use planner template");
-        assert!(!prompt.contains("BUILDER MODE"), "Should not use builder template");
+        assert!(prompt.contains("### 0. ORIENTATION"), "Should include ghuntley-style orientation");
+        assert!(prompt.contains("### 1. EXECUTE"), "Should use ghuntley-style execute phase");
+        assert!(prompt.contains("### GUARDRAILS"), "Should include guardrails section");
+
+        // Should include event context
+        assert!(prompt.contains("Review PR #123"), "Should include event context");
     }
 
     #[test]
@@ -1133,13 +1140,11 @@ hats:
         let planner_id = HatId::new("planner");
         let prompt = event_loop.build_prompt(&planner_id).unwrap();
 
-        // Should use build_custom_hat because it has custom instructions
+        // Should use build_custom_hat with ghuntley-style structure
         assert!(prompt.contains("Custom Planner"), "Should use custom name");
         assert!(prompt.contains("Custom planning instructions with special focus on security"), "Should include custom instructions");
-        assert!(prompt.contains("YOUR ROLE"), "Should use custom hat template");
-        
-        // Should NOT use the default planner template
-        assert!(!prompt.contains("PLANNER MODE"), "Should not use default planner template when custom instructions provided");
+        assert!(prompt.contains("### 1. EXECUTE"), "Should use ghuntley-style execute phase");
+        assert!(prompt.contains("### GUARDRAILS"), "Should include guardrails section");
     }
 
     #[test]
@@ -1159,10 +1164,11 @@ hats:
         let monitor_id = HatId::new("monitor");
         let prompt = event_loop.build_prompt(&monitor_id).unwrap();
 
-        // Should still use build_custom_hat with default instructions
+        // Should still use build_custom_hat with ghuntley-style structure
         assert!(prompt.contains("System Monitor"), "Should include custom hat name");
         assert!(prompt.contains("Follow the incoming event instructions"), "Should have default instructions when none provided");
-        assert!(prompt.contains("CORE BEHAVIORS"), "Should include core behaviors");
+        assert!(prompt.contains("### 0. ORIENTATION"), "Should include ghuntley-style orientation");
+        assert!(prompt.contains("### GUARDRAILS"), "Should include guardrails section");
         assert!(prompt.contains("Check system health"), "Should include event context");
     }
 
@@ -1464,8 +1470,46 @@ hats:
         
         let hat_id = HatId::new("builder");
         let backend = event_loop.get_hat_backend(&hat_id);
-        
+
         // Hat has no backend configured, should return None (inherit global)
         assert!(backend.is_none());
+    }
+
+    #[test]
+    fn test_hatless_mode_registers_ralph_catch_all() {
+        // When no hats are configured, "ralph" should be registered as catch-all
+        let config = RalphConfig::default();
+        let mut event_loop = EventLoop::new(config);
+
+        // Registry should be empty (no user-defined hats)
+        assert!(event_loop.registry().is_empty());
+
+        // But when we initialize, task.start should route to "ralph"
+        event_loop.initialize("Test prompt");
+
+        // "ralph" should have pending events
+        let next_hat = event_loop.next_hat();
+        assert!(next_hat.is_some(), "Should have pending events for ralph");
+        assert_eq!(next_hat.unwrap().as_str(), "ralph");
+    }
+
+    #[test]
+    fn test_hatless_mode_builds_ralph_prompt() {
+        // In hatless mode, build_prompt for "ralph" should return HatlessRalph prompt
+        let config = RalphConfig::default();
+        let mut event_loop = EventLoop::new(config);
+        event_loop.initialize("Test prompt");
+
+        let ralph_id = HatId::new("ralph");
+        let prompt = event_loop.build_prompt(&ralph_id);
+
+        assert!(prompt.is_some(), "Should build prompt for ralph");
+        let prompt = prompt.unwrap();
+
+        // Should contain ghuntley-style Ralph identity (uses "I'm Ralph" not "You are Ralph")
+        assert!(prompt.contains("I'm Ralph"), "Should identify as Ralph with ghuntley style");
+        assert!(prompt.contains("## WORKFLOW"), "Should have workflow section");
+        assert!(prompt.contains("## EVENT WRITING"), "Should have event writing section");
+        assert!(prompt.contains("LOOP_COMPLETE"), "Should reference completion promise");
     }
 }

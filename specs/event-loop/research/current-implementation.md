@@ -1,5 +1,8 @@
 # Current Implementation Analysis
 
+> **Note (2026-01-14):** This research document captures the state of the codebase before the Hatless Ralph implementation.
+> The `preflight_check()` method mentioned below has since been **removed** as Hatless Ralph provides universal fallback.
+
 Research into the existing ralph-core implementation to understand what needs to change for the hatless Ralph architecture.
 
 ---

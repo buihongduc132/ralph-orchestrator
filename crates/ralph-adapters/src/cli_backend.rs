@@ -5,6 +5,19 @@ use std::fmt;
 use std::io::Write;
 use tempfile::NamedTempFile;
 
+/// Output format supported by a CLI backend.
+///
+/// This allows adapters to declare whether they emit structured JSON
+/// for real-time streaming or plain text output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutputFormat {
+    /// Plain text output (default for most adapters)
+    #[default]
+    Text,
+    /// Newline-delimited JSON stream (Claude with --output-format stream-json)
+    StreamJson,
+}
+
 /// Error when creating a custom backend without a command.
 #[derive(Debug, Clone)]
 pub struct CustomBackendError;
@@ -37,6 +50,8 @@ pub struct CliBackend {
     pub prompt_mode: PromptMode,
     /// Argument flag for prompt (if prompt_mode is Arg).
     pub prompt_flag: Option<String>,
+    /// Output format emitted by this backend.
+    pub output_format: OutputFormat,
 }
 
 impl CliBackend {
@@ -61,12 +76,21 @@ impl CliBackend {
     /// Uses `-p` flag for headless/print mode execution. This runs Claude
     /// in non-interactive mode where it executes the prompt and exits.
     /// For interactive mode, stdin is used instead (handled in build_command).
+    ///
+    /// Emits `--output-format stream-json` for NDJSON streaming output.
+    /// Note: `--verbose` is required when using `--output-format stream-json` with `-p`.
     pub fn claude() -> Self {
         Self {
             command: "claude".to_string(),
-            args: vec!["--dangerously-skip-permissions".to_string()],
+            args: vec![
+                "--dangerously-skip-permissions".to_string(),
+                "--verbose".to_string(),
+                "--output-format".to_string(),
+                "stream-json".to_string(),
+            ],
             prompt_mode: PromptMode::Arg,
             prompt_flag: Some("-p".to_string()),
+            output_format: OutputFormat::StreamJson,
         }
     }
 
@@ -83,6 +107,7 @@ impl CliBackend {
             ],
             prompt_mode: PromptMode::Arg,
             prompt_flag: None,
+            output_format: OutputFormat::Text,
         }
     }
 
@@ -101,6 +126,7 @@ impl CliBackend {
             ],
             prompt_mode: PromptMode::Arg,
             prompt_flag: None,
+            output_format: OutputFormat::Text,
         }
     }
 
@@ -132,6 +158,7 @@ impl CliBackend {
                 args: args.clone(),
                 prompt_mode: PromptMode::Arg,
                 prompt_flag: None,
+                output_format: OutputFormat::Text,
             }),
         }
     }
@@ -143,6 +170,7 @@ impl CliBackend {
             args: vec!["--yolo".to_string()],
             prompt_mode: PromptMode::Arg,
             prompt_flag: Some("-p".to_string()),
+            output_format: OutputFormat::Text,
         }
     }
 
@@ -153,6 +181,7 @@ impl CliBackend {
             args: vec!["exec".to_string(), "--full-auto".to_string()],
             prompt_mode: PromptMode::Arg,
             prompt_flag: None, // Positional argument
+            output_format: OutputFormat::Text,
         }
     }
 
@@ -163,6 +192,7 @@ impl CliBackend {
             args: vec!["--dangerously-allow-all".to_string()],
             prompt_mode: PromptMode::Arg,
             prompt_flag: Some("-x".to_string()),
+            output_format: OutputFormat::Text,
         }
     }
 
@@ -183,6 +213,7 @@ impl CliBackend {
             args: config.args.clone(),
             prompt_mode,
             prompt_flag: config.prompt_flag.clone(),
+            output_format: OutputFormat::Text,
         })
     }
 
@@ -232,6 +263,19 @@ impl CliBackend {
             PromptMode::Stdin => (Some(prompt.to_string()), None),
         };
 
+        // Log the full command being built
+        tracing::debug!(
+            command = %self.command,
+            args_count = args.len(),
+            prompt_len = prompt.len(),
+            interactive = interactive,
+            uses_stdin = stdin_input.is_some(),
+            uses_temp_file = temp_file.is_some(),
+            "Built CLI command"
+        );
+        // Log full prompt at trace level for debugging
+        tracing::trace!(prompt = %prompt, "Full prompt content");
+
         (self.command.clone(), args, stdin_input, temp_file)
     }
 
@@ -256,8 +300,16 @@ mod tests {
         let (cmd, args, stdin, _temp) = backend.build_command("test prompt", false);
 
         assert_eq!(cmd, "claude");
-        assert_eq!(args, vec!["--dangerously-skip-permissions", "-p", "test prompt"]);
+        assert_eq!(args, vec![
+            "--dangerously-skip-permissions",
+            "--verbose",
+            "--output-format",
+            "stream-json",
+            "-p",
+            "test prompt"
+        ]);
         assert!(stdin.is_none()); // Uses -p flag, not stdin
+        assert_eq!(backend.output_format, OutputFormat::StreamJson);
     }
 
     #[test]
@@ -386,7 +438,14 @@ mod tests {
 
         assert_eq!(cmd, "claude");
         assert_eq!(args_auto, args_interactive);
-        assert_eq!(args_auto, vec!["--dangerously-skip-permissions", "-p", "test prompt"]);
+        assert_eq!(args_auto, vec![
+            "--dangerously-skip-permissions",
+            "--verbose",
+            "--output-format",
+            "stream-json",
+            "-p",
+            "test prompt"
+        ]);
         // -p mode is used for both auto and interactive
         assert!(stdin_auto.is_none());
         assert!(stdin_interactive.is_none());

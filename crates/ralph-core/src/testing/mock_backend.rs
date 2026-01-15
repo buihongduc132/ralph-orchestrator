@@ -41,7 +41,7 @@ impl MockBackend {
             .responses
             .get(state.current)
             .cloned()
-            .unwrap_or_else(|| String::from(""));
+            .unwrap_or_else(String::new);
 
         state.executions.push(ExecutionRecord {
             prompt: prompt.to_string(),

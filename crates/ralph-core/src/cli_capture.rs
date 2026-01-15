@@ -78,7 +78,9 @@ impl<W> CliCapture<W> {
     }
 
     /// Returns the current offset in milliseconds since capture started.
+    #[allow(clippy::cast_possible_truncation)]
     fn offset_ms(&self) -> u64 {
+        // Safe: milliseconds since start won't exceed u64 in practice
         self.start_time.elapsed().as_millis() as u64
     }
 

@@ -18,10 +18,11 @@ use app::App;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ralph_adapters::pty_handle::PtyHandle;
 use ralph_proto::Event;
-use state::TuiState;
 use std::sync::{Arc, Mutex};
 
+pub use state::{LoopMode, TuiState};
 pub use widgets::terminal::TerminalWidget;
+pub use widgets::{footer, header};
 
 /// Main TUI handle that integrates with the event bus.
 pub struct Tui {

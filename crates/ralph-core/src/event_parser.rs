@@ -8,6 +8,63 @@
 
 use ralph_proto::{Event, HatId};
 
+/// Strips ANSI escape sequences from a string.
+///
+/// Handles CSI sequences (\x1b[...m), OSC sequences (\x1b]...\x07),
+/// and simple escape sequences (\x1b followed by a single char).
+fn strip_ansi(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut result = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            // ESC character - start of escape sequence
+            i += 1;
+            if i >= bytes.len() {
+                break;
+            }
+
+            match bytes[i] {
+                b'[' => {
+                    // CSI sequence: ESC [ ... (final byte in 0x40-0x7E range)
+                    i += 1;
+                    while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) {
+                        i += 1;
+                    }
+                    if i < bytes.len() {
+                        i += 1; // Skip final byte
+                    }
+                }
+                b']' => {
+                    // OSC sequence: ESC ] ... (terminated by BEL or ST)
+                    i += 1;
+                    while i < bytes.len() {
+                        if bytes[i] == 0x07 {
+                            i += 1;
+                            break;
+                        }
+                        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+                            i += 2;
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                _ => {
+                    // Simple escape sequence: ESC + single char
+                    i += 1;
+                }
+            }
+        } else {
+            result.push(bytes[i]);
+            i += 1;
+        }
+    }
+
+    String::from_utf8_lossy(&result).into_owned()
+}
+
 /// Evidence of backpressure checks for build.done events.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackpressureEvidence {
@@ -116,13 +173,22 @@ impl EventParser {
     /// lint: pass
     /// typecheck: pass
     /// ```
+    ///
+    /// Note: ANSI escape codes are stripped before parsing to handle
+    /// colorized CLI output.
     pub fn parse_backpressure_evidence(payload: &str) -> Option<BackpressureEvidence> {
-        let tests_passed = payload.contains("tests: pass");
-        let lint_passed = payload.contains("lint: pass");
-        let typecheck_passed = payload.contains("typecheck: pass");
+        // Strip ANSI codes before checking for evidence strings
+        let clean_payload = strip_ansi(payload);
+
+        let tests_passed = clean_payload.contains("tests: pass");
+        let lint_passed = clean_payload.contains("lint: pass");
+        let typecheck_passed = clean_payload.contains("typecheck: pass");
 
         // Only return evidence if at least one check is mentioned
-        if payload.contains("tests:") || payload.contains("lint:") || payload.contains("typecheck:") {
+        if clean_payload.contains("tests:")
+            || clean_payload.contains("lint:")
+            || clean_payload.contains("typecheck:")
+        {
             Some(BackpressureEvidence {
                 tests_passed,
                 lint_passed,
@@ -402,5 +468,35 @@ Still working..."#;
         assert!(!evidence.lint_passed);
         assert!(!evidence.typecheck_passed);
         assert!(!evidence.all_passed());
+    }
+
+    #[test]
+    fn test_parse_backpressure_evidence_with_ansi_codes() {
+        let payload = "\x1b[0mtests: pass\x1b[0m\n\x1b[32mlint: pass\x1b[0m\ntypecheck: pass";
+        let evidence = EventParser::parse_backpressure_evidence(payload).unwrap();
+        assert!(evidence.tests_passed);
+        assert!(evidence.lint_passed);
+        assert!(evidence.typecheck_passed);
+        assert!(evidence.all_passed());
+    }
+
+    #[test]
+    fn test_strip_ansi_function() {
+        // Test the internal strip_ansi function via parse_backpressure_evidence
+        // Simple CSI reset sequence
+        let payload = "\x1b[0mtests: pass\x1b[0m";
+        let evidence = EventParser::parse_backpressure_evidence(payload).unwrap();
+        assert!(evidence.tests_passed);
+
+        // Bold green text
+        let payload = "\x1b[1m\x1b[32mtests: pass\x1b[0m";
+        let evidence = EventParser::parse_backpressure_evidence(payload).unwrap();
+        assert!(evidence.tests_passed);
+
+        // Multiple sequences mixed with content
+        let payload = "\x1b[31mtests: fail\x1b[0m\n\x1b[32mlint: pass\x1b[0m";
+        let evidence = EventParser::parse_backpressure_evidence(payload).unwrap();
+        assert!(!evidence.tests_passed); // "tests: fail" not "tests: pass"
+        assert!(evidence.lint_passed);
     }
 }

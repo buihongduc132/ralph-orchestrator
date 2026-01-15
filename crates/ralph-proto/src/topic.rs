@@ -22,6 +22,14 @@ impl Topic {
         &self.0
     }
 
+    /// Returns true if this is a global wildcard (`*`) that matches everything.
+    ///
+    /// Used for fallback routing - global wildcards have lower priority than
+    /// specific subscriptions.
+    pub fn is_global_wildcard(&self) -> bool {
+        self.0 == "*"
+    }
+
     /// Checks if this topic pattern matches a given topic.
     ///
     /// Pattern rules:

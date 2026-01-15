@@ -28,6 +28,16 @@ fn test_basic_session_fixture_exists() {
     );
 }
 
+#[test]
+fn test_complex_session_fixture_exists() {
+    let fixture = fixtures_dir().join("claude_complex_session.jsonl");
+    assert!(
+        fixture.exists(),
+        "Complex session fixture should exist at {:?}",
+        fixture
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Acceptance Criteria #7: Integration Test Validates Full Replay Flow
 // ─────────────────────────────────────────────────────────────────────────────
@@ -68,6 +78,47 @@ fn test_full_replay_flow_with_basic_session() {
     assert!(
         result.output_bytes() > 0,
         "Should have processed some output bytes"
+    );
+}
+
+#[test]
+fn test_full_replay_flow_with_complex_session() {
+    let fixture = fixtures_dir().join("claude_complex_session.jsonl");
+
+    let config = SmokeTestConfig::new(&fixture);
+    let result = SmokeRunner::run(&config).expect("Should run fixture successfully");
+
+    // Verify completion
+    assert!(
+        result.completed_successfully(),
+        "Complex session should complete successfully"
+    );
+    assert_eq!(
+        *result.termination_reason(),
+        TerminationReason::Completed,
+        "Should terminate with Completed (LOOP_COMPLETE detected)"
+    );
+
+    // Verify iterations (3 chunks processed before LOOP_COMPLETE in chunk 4)
+    assert!(
+        result.iterations_run() >= 3,
+        "Should process at least 3 chunks, got {}",
+        result.iterations_run()
+    );
+
+    // Verify event parsing
+    // Complex fixture contains: task.planning, file.created, command.executed, tests.passed, build.done
+    assert!(
+        result.event_count() >= 5,
+        "Should parse at least 5 events from complex fixture, got {}",
+        result.event_count()
+    );
+
+    // Verify output processing - complex session has substantial output
+    assert!(
+        result.output_bytes() > 500,
+        "Complex session should have substantial output, got {} bytes",
+        result.output_bytes()
     );
 }
 

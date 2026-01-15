@@ -1,326 +1,109 @@
-# Gap Analysis Results
+# TUI Issues
 
-> Analysis date: 2026-01-14
-> Specs analyzed: 19
-> Previous analysis: 2026-01-13
-> Hat collections manual testing: 2026-01-14
+Issues identified via `/tui-validate` skill validation against `ralph-header`, `ralph-footer`, and `ralph-full` criteria.
 
-## Summary
-
-| Priority | Issue | Spec | Status |
-|----------|-------|------|--------|
-| 🔴 P0 | 3 presets fail preflight_check (orphan terminal events) | hat-collections.spec.md | NEW |
-| 🟡 P1 | Backend flag filtering uses config default, not execution mode | interactive-mode.spec.md | NEW |
-| 🟡 P1 | Reachability validation not implemented | hat-collections.spec.md | PLANNED |
-| 🟡 P1 | Observer not wired to EventBus during benchmark runs | benchmark-harness.spec.md | TODO |
-| 🟡 P1 | Empty hats collection {} passes validation (should fail) | hat-collections.spec.md | NEW |
-| 🟢 P2 | Custom hat emoji/registry integration missing | terminal-ui.spec.md | MINOR |
-| 🟢 P2 | recovery_hat configuration field missing | hat-collections.spec.md | PLANNED |
-| 🟢 P2 | terminal_events configuration field missing | hat-collections.spec.md | PLANNED |
-| 🟢 P2 | Test tools not agent-callable | test-tools.spec.md | ~30% |
-| 🟢 P2 | Benchmark export formats not implemented | benchmark-ux.spec.md | PLANNED |
-| 🟡 P1 | Behavioral verification catalog not implemented (0/78) | behavioral-verification.spec.md | PLANNED |
-| 🔵 P3 | 6 specs missing frontmatter | Various | DOCS |
-| 🔵 P3 | Empty hat name string allowed (should be rejected) | hat-collections.spec.md | NEW |
-
-### Resolved Since 2026-01-13
-
-The following P0 issues from the previous analysis have been **fixed**:
-
-| Issue | Resolution |
-|-------|------------|
-| Custom backend args/prompt_flag missing | ✅ Fixed: `CliConfig` now has `args`, `prompt_flag`, `prompt_mode` fields |
-| Custom backend validation missing | ✅ Fixed: Returns `CustomBackendError` when command not specified |
-| Kiro adapter settings missing | ✅ Fixed: `AdaptersConfig` now includes `kiro` field |
-| Per-adapter timeout not enforced | ✅ Fixed: `cli_executor.rs` reads and enforces per-adapter timeout |
-| CLI executor working directory not set | ✅ Fixed: Both CLI and PTY executors explicitly set `current_dir()` |
-| Interactive idle timeout doesn't reset | ✅ Fixed: Resets on both agent output AND user input |
+**Status**: ✅ All issues resolved in commit `46e5196c`
 
 ---
 
-## Hat Collections Manual Testing Results (2026-01-14)
+## Issue 1: Header displays double space after emoji
 
-### Presets Tested
+**Component:** `crates/ralph-tui/src/state.rs`
+**Severity:** Minor (Visual)
+**Status:** ✅ RESOLVED
 
-| Preset | validate() | preflight_check() | Issues |
-|--------|-----------|-------------------|--------|
-| feature.yml | ✅ | ✅ | None |
-| feature-minimal.yml | ✅ | ✅ | None |
-| research.yml | ✅ | ❌ | Orphan: `synthesis.complete`, `research.question` |
-| docs.yml | ✅ | ✅ | None |
-| debug.yml | ✅ | ❌ | Orphan: `hypothesis.confirmed`, `fix.blocked`, `fix.failed` |
-| refactor.yml | ✅ | ✅ | None |
-| review.yml | ✅ | ❌ | Orphan: `review.complete` |
-| deploy.yml | ✅ | ✅ | None |
-| gap-analysis.yml | ✅ | ✅ | None |
+### Description
 
-### Issue: Orphan Terminal Events in Presets (P0)
+The header displayed a double space after the hat emoji (e.g., `🔨  Builder` instead of `🔨 Builder`). This occurred because emojis are rendered as double-width characters in monospace fonts, but the code added a space between the emoji and the hat name.
 
-**Problem:** Three presets (`research.yml`, `debug.yml`, `review.yml`) fail `preflight_check()` because they publish events intended as workflow completion signals, but the validator treats them as errors.
+### Resolution
 
-**Spec Reference:** hat-collections.spec.md lines 64-78 describe user-declared terminal events:
-```yaml
-event_loop:
-  terminal_events:
-    - "deploy.complete"     # Custom terminal event
+Removed the space from hat display strings in `state.rs`:
+- `"📋 Planner"` → `"📋Planner"`
+- `"🔨 Builder"` → `"🔨Builder"`
+
+The emoji's double-width rendering now provides natural visual separation.
+
+---
+
+## Issue 2: Footer uses hardcoded whitespace for alignment
+
+**Component:** `crates/ralph-tui/src/widgets/footer.rs`
+**Severity:** Medium (Layout)
+**Status:** ✅ RESOLVED
+
+### Description
+
+The footer used 30 hardcoded space characters to separate the event topic from the activity indicator. This was fragile and didn't adapt to different terminal widths.
+
+### Resolution
+
+Refactored footer to use `Constraint::Fill(1)` for flexible layout:
+- Changed render function signature to accept the render area
+- Used horizontal Layout with constraints:
+  - `Constraint::Min(30)` for event topic
+  - `Constraint::Fill(1)` for flexible spacer
+  - `Constraint::Min(12)` for activity indicator
+
+The footer now adapts to any terminal width.
+
+---
+
+## Issue 3: Status widget is unused
+
+**Component:** `crates/ralph-tui/src/widgets/status.rs`
+**Severity:** Low (Dead Code)
+**Status:** ✅ RESOLVED
+
+### Description
+
+The `status.rs` widget was defined but never used in the main TUI layout (`app.rs`). It duplicated functionality from the header.
+
+### Resolution
+
+Removed `status.rs` and its module declaration in `mod.rs`.
+
+---
+
+## Issue 4: Status widget uses hardcoded label spacing
+
+**Component:** `crates/ralph-tui/src/widgets/status.rs`
+**Severity:** Low (Layout)
+**Status:** ✅ RESOLVED (via Issue 3)
+
+### Description
+
+The status widget used hardcoded spaces for label alignment.
+
+### Resolution
+
+Resolved by removing the unused status widget entirely.
+
+---
+
+## Validation Summary
+
+| Component | Criteria | Before | After |
+|-----------|----------|--------|-------|
+| Header | `ralph-header` | ⚠️ PARTIAL | ✅ PASS |
+| Footer | `ralph-footer` | ⚠️ PARTIAL | ✅ PASS |
+| Full Layout | `ralph-full` | ✅ PASS | ✅ PASS |
+| Help | `tui-basic` | ✅ PASS | ✅ PASS |
+| Status | N/A | ⚠️ UNUSED | ✅ REMOVED |
+
+---
+
+## Commit
+
+All fixes committed in:
+```
+46e5196c fix(tui): resolve visual rendering issues in header and footer
 ```
 
-**Current Behavior:** Only `LOOP_COMPLETE` and `completion_promise` are exempted from orphan detection.
-
-**Expected Behavior:** Events in `terminal_events` list should also be exempted.
-
-**Root Cause:** `terminal_events` config field is not implemented in `EventLoopConfig`.
-
-**Affected Presets:**
-- `research.yml`: publishes `synthesis.complete` and `research.question` (intentional hand-off points)
-- `debug.yml`: publishes `hypothesis.confirmed`, `fix.blocked`, `fix.failed` (intentional stuck-state signals)
-- `review.yml`: publishes `review.complete` (intentional completion signal)
-
-### Validation Edge Cases Tested
-
-| Test Case | validate() | preflight_check() | Expected | Notes |
-|-----------|-----------|-------------------|----------|-------|
-| Empty hats `{}` | ✅ pass | ✅ pass | ❌ fail | Spec says "collection cannot be empty" |
-| No entry point | ✅ pass | ❌ fail | ❌ fail | Correctly rejected |
-| Ambiguous routing | ❌ fail | - | ❌ fail | Correctly rejected |
-| Orphan event | ✅ pass | ❌ fail | ❌ fail | Correctly rejected |
-| Unreachable hat | ✅ pass | ⚠️ partial | ❌ fail | Only catches orphan, not unreachability |
-| Missing task.resume | ✅ pass | ✅ pass | ⚠️ warn | Spec says multi-hat needs recovery hat |
-| Self-routing | ✅ pass | ✅ pass | ✅ pass | Correctly allowed |
-| Circular flow | ✅ pass | ✅ pass | ✅ pass | Correctly allowed |
-| Custom completion | ✅ pass | ✅ pass | ✅ pass | Correctly terminal |
-| Hat missing name | ❌ parse | - | ❌ fail | Correctly rejected |
-| Empty name string | ✅ pass | ✅ pass | ❌ fail | Should validate name |
-
-### Recommendations
-
-1. **P0: Implement `terminal_events` config field** — Unblocks 3 presets from failing validation
-2. **P1: Reject empty hats collection** — Currently `hats: {}` passes but spec says must have ≥1 hat
-3. **P1: Implement reachability check (DFS)** — Currently only orphan detection, not graph traversal
-4. **P2: Warn on missing `task.resume` for multi-hat** — Spec requires recovery hat validation
-5. **P3: Validate empty hat name** — `name: ""` should be rejected
-
----
-
-## Critical Gaps (Spec Violations)
-
-### interactive-mode.spec.md — Backend Flag Filtering Logic Issue
-
-- **Spec says:** "Agent flags are determined by execution mode, not config default" (lines 264-284)
-- **Implementation:** `build_command()` receives `interactive` boolean from config's `default_mode`, not actual execution mode
-- **Location:** `crates/ralph-adapters/src/cli_backend.rs:179`, `crates/ralph-cli/src/main.rs:1134`
-- **Impact:** When Claude backend forces PTY mode (interactive) but config says `default_mode: "autonomous"`, other backends like kiro may receive incorrect flags
-- **Severity:** Medium
-- **Fix:** Pass the actual execution mode boolean to `build_command()`, not just the config setting
-
----
-
-## Missing Features (Spec Not Implemented)
-
-### hat-collections.spec.md — Reachability Validation
-
-- **Acceptance criterion:** "Error 'Hat X is unreachable from entry point' when hat cannot be reached via event flow"
-- **Status:** Not implemented - no DFS graph traversal exists
-- **Location:** Should be in `crates/ralph-core/src/config.rs:preflight_check()`
-- **Spec reference:** Lines 224-248 (detailed algorithm provided)
-- **Workaround:** Orphan event detection catches most misconfigurations
-
-### hat-collections.spec.md — Recovery Hat Configuration
-
-- **Acceptance criterion:** "Configurable `recovery_hat` field with default to 'planner'"
-- **Status:** Field does not exist in `EventLoopConfig`
-- **Location:** `crates/ralph-core/src/config.rs:617-652` (EventLoopConfig struct)
-- **Current behavior:** Hardcoded to "planner" at `crates/ralph-core/src/event_loop.rs:288`
-
-### hat-collections.spec.md — Terminal Events Configuration
-
-- **Acceptance criterion:** "Configurable `terminal_events` list"
-- **Status:** Field does not exist - hardcoded to `["LOOP_COMPLETE", completion_promise]`
-- **Location:** `crates/ralph-core/src/config.rs:448`
-
-### hat-collections.spec.md — Strict Validation Bypass
-
-- **Acceptance criterion:** "`strict_validation: false` downgrades errors to warnings"
-- **Status:** Field does not exist in `EventLoopConfig`
-
-### terminal-ui.spec.md — Custom Hat Emoji Support
-
-- **Acceptance criterion:** "Custom hats display with configurable emoji"
-- **Status:** No mechanism to assign emojis to custom hats beyond hardcoded "🎭"
-- **Location:** `crates/ralph-tui/src/state.rs:44-64`
-- **Severity:** Low (affects only custom hat scenarios)
-
-### terminal-ui.spec.md — HatRegistry Integration for Custom Hats
-
-- **Acceptance criterion:** "TUI initialized with HatRegistry to look up subscriptions" (spec line 99)
-- **Status:** TUI hardcodes mappings for planner and builder only
-- **Location:** `crates/ralph-tui/src/state.rs`
-- **Severity:** Medium (custom hats with non-standard subscriptions won't display correctly)
-
-### benchmark-harness.spec.md — Observer Wiring
-
-- **Acceptance criterion:** "Observer subscribes to EventBus::publish() and logs all events"
-- **Status:** SessionRecorder created but not wired to EventBus during task execution
-- **Location:** `crates/ralph-bench/src/main.rs:397` (TODO comment exists)
-- **Impact:** Events aren't actually recorded to JSONL during benchmark runs
-- **Fix:** Wire `SessionRecorder::make_observer()` to `EventLoop::set_observer()`
-
-### benchmark-ux.spec.md — Export Formats
-
-- **Acceptance criterion:** "Export to asciinema cast, VHS tape, and SVG formats"
-- **Status:** Not implemented - no `ralph-bench export` subcommand
-- **What exists:** SessionPlayer can replay JSONL with timing and ANSI colors
-
-### benchmark-ux.spec.md — Snapshot Testing
-
-- **Acceptance criterion:** "Snapshot testing with insta integration"
-- **Status:** Not implemented - no snapshot comparison infrastructure
-
-### behavioral-verification.spec.md — Progressive Verification Pipeline
-
-- **Acceptance criteria:** 6-level progressive verification (Level 0-6)
-- **Status:** ~15% implemented - infrastructure only
-- **What exists:**
-  - SessionRecorder/SessionPlayer ✓
-  - ralph-bench with run/replay commands ✓
-  - specs/behaviors.yaml with ~30 CLI checks ✓
-- **What's missing:**
-  - Level 3-4 verification scripts (`level3-smoke.sh`, `level4-verify.sh`)
-  - 78-behavior catalog (Event Routing, Planner, Builder, Safeguards, etc.)
-  - Cassettes directory for VCR recordings
-  - Mock backend (`--backend mock`, `--mock-responses`)
-  - Verifier hat configuration
-  - `ralph-test` binary
-  - Two-phase verification (execute + Ralph-as-Verifier)
-  - LLM-as-judge integration
-  - JUnit/JSON report generation
-- **Location:** Spec describes system spanning multiple crates
-
-### test-tools.spec.md — Agent-Callable Test Tools
-
-- **Acceptance criteria:** 9 test tools callable by agents
-- **Status:** ~30% implemented - infrastructure exists but tools not exposed
-- **What exists:**
-  - SessionRecorder (JSONL capture) ✓
-  - SessionPlayer (replay with timing) ✓
-  - TaskWorkspace (isolation) ✓
-  - EventLoop (orchestration) ✓
-- **What's missing:**
-  - Agent-callable tool wrappers
-  - Mock backend for deterministic testing
-  - 14 assertion types engine
-  - VCR cassette format (YAML)
-  - LLM-as-judge evaluation runner
-  - JUnit/TAP report generation
-
----
-
-## Undocumented Behavior (Implementation Without Spec)
-
-### ralph-bench crate
-
-- **Behavior:** Full benchmarking binary with run/list/replay/show subcommands
-- **Should be documented in:** benchmark-harness.spec.md or new ralph-bench.spec.md
-- **Location:** `crates/ralph-bench/src/main.rs`
-
-### Task abandonment event
-
-- **Behavior:** Emits `build.task.abandoned` event after 3 consecutive blocks
-- **Should be documented in:** event-loop.spec.md (implicit but event name not specified)
-- **Location:** `crates/ralph-core/src/event_loop.rs:496-501`
-
----
-
-## Spec Improvements Needed
-
-### Missing Frontmatter (6 specs)
-
-The following specs lack standard YAML frontmatter (status, gap_analysis, related):
-
-- feature-parity.spec.md
-- v1-v2-feature-parity.spec.md
-- benchmark-tasks.spec.md
-- benchmark-harness.spec.md
-- benchmark-ux.spec.md
-- homebrew-tap.spec.md
-
-### hat-collections.spec.md — Stale gap_analysis
-
-- **Problem:** `gap_analysis: null` despite partial implementation existing
-- **Suggestion:** Update to `gap_analysis: 2026-01-14`
-
----
-
-## Verification Summary by Spec
-
-### Core Specs
-
-| Spec | Status | Conformance | Notes |
-|------|--------|-------------|-------|
-| cli-adapters.spec.md | review | **100%** | All acceptance criteria pass ✅ |
-| interactive-mode.spec.md | review | **95%** | Backend flag filtering issue |
-| event-loop.spec.md | approved | **100%** | All acceptance criteria pass ✅ |
-| scaffolding.spec.md | implemented | **100%** | All acceptance criteria pass ✅ |
-| terminal-ui.spec.md | implemented | **98%** | Custom hat emoji/registry minor |
-
-### Adapter Specs
-
-| Spec | Status | Conformance | Notes |
-|------|--------|-------------|-------|
-| adapters/claude.spec.md | review | **100%** | PTY auto-enable, large prompt handling ✅ |
-| adapters/kiro.spec.md | review | **95%** | Flag filtering affects interactive mode |
-| adapters/gemini.spec.md | review | **100%** | Headless operation works ✅ |
-| adapters/codex.spec.md | review | **100%** | Subcommand + full-auto ✅ |
-| adapters/amp.spec.md | review | **100%** | Execute mode + auto-approval ✅ |
-
-### Planning/Draft Specs
-
-| Spec | Status | Conformance | Notes |
-|------|--------|-------------|-------|
-| hat-collections.spec.md | draft | **60%** | 5 validations done, 5 missing |
-| behavioral-verification.spec.md | draft | **15%** | Infrastructure only, catalog not built |
-| test-tools.spec.md | review | **30%** | Infrastructure exists, tools not callable |
-
-### Benchmark Specs
-
-| Spec | Status | Conformance | Notes |
-|------|--------|-------------|-------|
-| benchmark-tasks.spec.md | N/A | **95%** | Nearly complete |
-| benchmark-harness.spec.md | N/A | **85%** | Observer wiring needed |
-| benchmark-ux.spec.md | N/A | **80%** | Export formats missing |
-
-### Parity/Distribution Specs
-
-| Spec | Status | Conformance | Notes |
-|------|--------|-------------|-------|
-| feature-parity.spec.md | N/A | N/A | Missing frontmatter |
-| v1-v2-feature-parity.spec.md | N/A | **100%** | Checklist complete ✅ |
-| homebrew-tap.spec.md | N/A | N/A | External distribution |
-
----
-
-## Recommended Priority
-
-### P0 — None Currently
-
-All previous P0 issues have been resolved.
-
-### P1 — Fix Before Release
-
-1. **Interactive mode backend flag filtering** (medium impact, small fix)
-2. **Benchmark observer wiring** (enables actual session recording)
-
-### P2 — Implement When Needed
-
-1. Hat-collections reachability validation
-2. Hat-collections recovery_hat/terminal_events configuration
-3. Terminal-ui custom hat registry integration
-4. Test-tools agent-callable wrappers
-5. Benchmark export formats
-
-### P3 — Future Enhancement
-
-1. Test-tools full implementation (mock backend, cassettes, LLM-as-judge)
-2. Homebrew tap setup
-3. cargo-dist distribution pipeline
-4. Add missing frontmatter to 6 specs
+Files changed:
+- `crates/ralph-tui/src/state.rs` - Removed space after emoji
+- `crates/ralph-tui/src/widgets/footer.rs` - Flexible layout
+- `crates/ralph-tui/src/widgets/header.rs` - Updated tests
+- `crates/ralph-tui/src/widgets/mod.rs` - Removed status module
+- `crates/ralph-tui/src/widgets/status.rs` - Deleted
+- `crates/ralph-tui/examples/validate_widgets.rs` - Added validation example

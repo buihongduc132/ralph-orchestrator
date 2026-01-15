@@ -60,11 +60,10 @@ impl HatlessRalph {
     /// Builds Ralph's prompt based on context.
     pub fn build_prompt(&self, _context: &str) -> String {
         let mut prompt = self.core_prompt();
+        prompt.push_str(&self.workflow_section());
 
         if let Some(topology) = &self.hat_topology {
-            prompt.push_str(&self.multi_hat_section(topology));
-        } else {
-            prompt.push_str(&self.solo_mode_section());
+            prompt.push_str(&self.hats_section(topology));
         }
 
         prompt.push_str(&self.event_writing_section());
@@ -83,19 +82,27 @@ impl HatlessRalph {
             .core
             .guardrails
             .iter()
-            .map(|g| format!("- {g}"))
+            .enumerate()
+            .map(|(i, g)| format!("{}. {g}", 999 + i))
             .collect::<Vec<_>>()
             .join("\n");
 
         format!(
-            r"You are Ralph. You're the coordinator.
+            r"I'm Ralph. Fresh context each iteration.
 
-## CORE BEHAVIORS
-**Scratchpad:** `{scratchpad}` is shared state. Read it. Update it.
-**Specs:** `{specs_dir}` is the source of truth. Implementations must match.
-**Backpressure:** Tests/typecheck/lint must pass.
+### 0a. ORIENTATION
+Study `{specs_dir}` to understand requirements.
+Don't assume features aren't implemented—search first.
 
-### Guardrails
+### 0b. SCRATCHPAD
+Study `{scratchpad}`. It's shared state. It's memory.
+
+Task markers:
+- `[ ]` pending
+- `[x]` done
+- `[~]` cancelled (with reason)
+
+### GUARDRAILS
 {guardrails}
 
 ",
@@ -105,27 +112,36 @@ impl HatlessRalph {
         )
     }
 
-    fn solo_mode_section(&self) -> String {
-        r"## SOLO MODE
+    fn workflow_section(&self) -> String {
+        format!(
+            r"## WORKFLOW
 
-You're doing everything yourself. Plan, implement, validate.
+### 1. GAP ANALYSIS
+Compare specs against codebase. Use parallel subagents (up to 10) for searches.
 
-1. **Gap analysis.** Compare specs against codebase.
-2. **Own the scratchpad.** Create/update with prioritized tasks.
-3. **Implement.** Pick ONE task, write code, validate.
-4. **Commit.** Mark `[x]` in scratchpad.
-5. **Repeat** until all tasks done.
+### 2. PLAN
+Update `{scratchpad}` with prioritized tasks.
 
-"
-        .to_string()
+### 3. IMPLEMENT
+Pick ONE task. Only 1 subagent for build/tests.
+
+### 4. COMMIT
+Capture the why, not just the what. Mark `[x]` in scratchpad.
+
+### 5. REPEAT
+Until all tasks `[x]` or `[~]`.
+
+",
+            scratchpad = self.core.scratchpad
+        )
     }
 
-    fn multi_hat_section(&self, topology: &HatTopology) -> String {
-        let mut section = String::from("## MULTI-HAT MODE\n\nYou coordinate a team. Delegate to hats or handle yourself.\n\n### MY TEAM\n\n");
+    fn hats_section(&self, topology: &HatTopology) -> String {
+        let mut section = String::from("## HATS\n\nDelegate via events.\n\n");
 
         // Build hat table
-        section.push_str("| Hat | Subscribes To | Publishes |\n");
-        section.push_str("|-----|---------------|----------|\n");
+        section.push_str("| Hat | Triggers On | Publishes |\n");
+        section.push_str("|-----|-------------|----------|\n");
 
         for hat in &topology.hats {
             let subscribes = hat.subscribes_to.join(", ");
@@ -133,7 +149,7 @@ You're doing everything yourself. Plan, implement, validate.
             section.push_str(&format!("| {} | {} | {} |\n", hat.name, subscribes, publishes));
         }
 
-        section.push_str("\n**Your role:** Catch orphaned events, coordinate work, ensure completion.\n\n");
+        section.push('\n');
         section
     }
 
@@ -166,25 +182,50 @@ mod tests {
     use crate::config::RalphConfig;
 
     #[test]
-    fn test_solo_mode_prompt() {
+    fn test_prompt_without_hats() {
         let config = RalphConfig::default();
         let registry = HatRegistry::new(); // Empty registry
         let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry);
 
         let prompt = ralph.build_prompt("");
 
-        assert!(prompt.contains("You are Ralph. You're the coordinator."));
-        assert!(prompt.contains("## CORE BEHAVIORS"));
-        assert!(prompt.contains("## SOLO MODE"));
-        assert!(prompt.contains("You're doing everything yourself"));
-        assert!(!prompt.contains("## MULTI-HAT MODE"));
+        // Identity with ghuntley style
+        assert!(prompt.contains("I'm Ralph. Fresh context each iteration."));
+
+        // Numbered orientation phases
+        assert!(prompt.contains("### 0a. ORIENTATION"));
+        assert!(prompt.contains("Study"));
+        assert!(prompt.contains("Don't assume features aren't implemented"));
+
+        // Scratchpad section with task markers
+        assert!(prompt.contains("### 0b. SCRATCHPAD"));
+        assert!(prompt.contains("Task markers:"));
+        assert!(prompt.contains("- `[ ]` pending"));
+        assert!(prompt.contains("- `[x]` done"));
+        assert!(prompt.contains("- `[~]` cancelled"));
+
+        // Workflow with numbered steps
+        assert!(prompt.contains("## WORKFLOW"));
+        assert!(prompt.contains("### 1. GAP ANALYSIS"));
+        assert!(prompt.contains("Use parallel subagents (up to 10)"));
+        assert!(prompt.contains("### 2. PLAN"));
+        assert!(prompt.contains("### 3. IMPLEMENT"));
+        assert!(prompt.contains("Only 1 subagent for build/tests"));
+        assert!(prompt.contains("### 4. COMMIT"));
+        assert!(prompt.contains("Capture the why"));
+        assert!(prompt.contains("### 5. REPEAT"));
+
+        // Should NOT have hats section when no hats
+        assert!(!prompt.contains("## HATS"));
+
+        // Event writing and completion
         assert!(prompt.contains("## EVENT WRITING"));
         assert!(prompt.contains(".agent/events.jsonl"));
         assert!(prompt.contains("LOOP_COMPLETE"));
     }
 
     #[test]
-    fn test_multi_hat_mode_prompt() {
+    fn test_prompt_with_hats() {
         let yaml = r#"
 hats:
   planner:
@@ -202,12 +243,23 @@ hats:
 
         let prompt = ralph.build_prompt("");
 
-        assert!(prompt.contains("You are Ralph. You're the coordinator."));
-        assert!(prompt.contains("## CORE BEHAVIORS"));
-        assert!(prompt.contains("## MULTI-HAT MODE"));
-        assert!(prompt.contains("### MY TEAM"));
-        assert!(prompt.contains("| Hat | Subscribes To | Publishes |"));
-        assert!(!prompt.contains("## SOLO MODE"));
+        // Identity with ghuntley style
+        assert!(prompt.contains("I'm Ralph. Fresh context each iteration."));
+
+        // Orientation phases
+        assert!(prompt.contains("### 0a. ORIENTATION"));
+        assert!(prompt.contains("### 0b. SCRATCHPAD"));
+
+        // Workflow is always present
+        assert!(prompt.contains("## WORKFLOW"));
+        assert!(prompt.contains("### 1. GAP ANALYSIS"));
+
+        // Hats section when hats are defined
+        assert!(prompt.contains("## HATS"));
+        assert!(prompt.contains("Delegate via events"));
+        assert!(prompt.contains("| Hat | Triggers On | Publishes |"));
+
+        // Event writing and completion
         assert!(prompt.contains("## EVENT WRITING"));
         assert!(prompt.contains("LOOP_COMPLETE"));
     }
@@ -224,16 +276,48 @@ hats:
     }
 
     #[test]
-    fn test_core_behaviors_always_present() {
+    fn test_ghuntley_patterns_present() {
         let config = RalphConfig::default();
         let registry = HatRegistry::new();
         let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry);
 
         let prompt = ralph.build_prompt("");
 
-        assert!(prompt.contains("**Scratchpad:**"));
-        assert!(prompt.contains("**Specs:**"));
-        assert!(prompt.contains("**Backpressure:**"));
-        assert!(prompt.contains("### Guardrails"));
+        // Key ghuntley language patterns
+        assert!(prompt.contains("Study"), "Should use 'study' verb");
+        assert!(
+            prompt.contains("Don't assume features aren't implemented"),
+            "Should have 'don't assume' guardrail"
+        );
+        assert!(
+            prompt.contains("parallel subagents"),
+            "Should mention parallel subagents for reads"
+        );
+        assert!(
+            prompt.contains("Only 1 subagent"),
+            "Should limit to 1 subagent for builds"
+        );
+        assert!(
+            prompt.contains("Capture the why"),
+            "Should emphasize 'why' in commits"
+        );
+
+        // Numbered guardrails (999+)
+        assert!(prompt.contains("### GUARDRAILS"), "Should have guardrails section");
+        assert!(prompt.contains("999."), "Guardrails should use high numbers");
+    }
+
+    #[test]
+    fn test_scratchpad_format_documented() {
+        let config = RalphConfig::default();
+        let registry = HatRegistry::new();
+        let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry);
+
+        let prompt = ralph.build_prompt("");
+
+        // Task marker format is documented
+        assert!(prompt.contains("- `[ ]` pending"));
+        assert!(prompt.contains("- `[x]` done"));
+        assert!(prompt.contains("- `[~]` cancelled (with reason)"));
     }
 }

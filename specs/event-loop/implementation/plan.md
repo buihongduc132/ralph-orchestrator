@@ -2,18 +2,18 @@
 
 ## Checklist
 
-- [ ] **Step 1:** Add `HatBackend` enum and config parsing
-- [ ] **Step 2:** Create `EventReader` for JSONL event parsing
-- [ ] **Step 3:** Create `HatlessRalph` struct and prompt builder
-- [ ] **Step 4:** Modify `HatRegistry` to remove default hats
-- [ ] **Step 5:** Update `InstructionBuilder` with `build_hatless_ralph()`
-- [ ] **Step 6:** Modify `EventLoop` to use Ralph as fallback
-- [ ] **Step 7:** Implement `default_publishes` fallback logic
-- [ ] **Step 8:** Add per-hat backend resolution
-- [ ] **Step 9:** Update presets (remove planner hat)
-- [ ] **Step 10:** Create mock CLI test harness
-- [ ] **Step 11:** Write E2E scenario tests
-- [ ] **Step 12:** Update documentation and migration guide
+- [x] **Step 1:** Add `HatBackend` enum and config parsing
+- [x] **Step 2:** Create `EventReader` for JSONL event parsing
+- [x] **Step 3:** Create `HatlessRalph` struct and prompt builder
+- [x] **Step 4:** Modify `HatRegistry` to remove default hats
+- [x] **Step 5:** Update `InstructionBuilder` with `build_hatless_ralph()`
+- [x] **Step 6:** Modify `EventLoop` to use Ralph as fallback
+- [x] **Step 7:** Implement `default_publishes` fallback logic
+- [x] **Step 8:** Add per-hat backend resolution
+- [x] **Step 9:** Update presets (remove planner hat)
+- [x] **Step 10:** Create mock CLI test harness
+- [x] **Step 11:** Write E2E scenario tests
+- [x] **Step 12:** Update documentation and migration guide
 
 ---
 

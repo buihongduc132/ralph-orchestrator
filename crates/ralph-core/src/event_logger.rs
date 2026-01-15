@@ -12,19 +12,24 @@ use tracing::{debug, warn};
 
 /// A logged event record for debugging.
 ///
-/// Matches the spec format:
-/// ```jsonl
-/// {"ts":"2024-01-15T10:23:45Z","iteration":1,"hat":"loop","topic":"task.start","triggered":"planner","payload":"..."}
-/// ```
+/// Supports two schemas:
+/// 1. Rich internal format (logged by Ralph):
+///    `{"ts":"2024-01-15T10:23:45Z","iteration":1,"hat":"loop","topic":"task.start","triggered":"planner","payload":"..."}`
+/// 2. Simple agent format (written by agents):
+///    `{"topic":"build.task","payload":"...","ts":"2024-01-15T10:24:12Z"}`
+///
+/// Fields that don't exist in the agent format default to sensible values.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventRecord {
     /// ISO 8601 timestamp.
     pub ts: String,
 
-    /// Loop iteration number.
+    /// Loop iteration number (0 if not provided by agent-written events).
+    #[serde(default)]
     pub iteration: u32,
 
-    /// Hat that was active when event was published.
+    /// Hat that was active when event was published (empty string if not provided).
+    #[serde(default)]
     pub hat: String,
 
     /// Event topic.
@@ -34,7 +39,8 @@ pub struct EventRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub triggered: Option<String>,
 
-    /// Event content (truncated if large).
+    /// Event content (truncated if large). Defaults to empty string for agent events without payload.
+    #[serde(default)]
     pub payload: String,
 
     /// How many times this task has blocked (optional).
@@ -368,5 +374,75 @@ mod tests {
 
         let records = history.read_all().unwrap();
         assert!(records.is_empty());
+    }
+
+    #[test]
+    fn test_agent_written_events_without_iteration() {
+        // Agent events use simple format: {"topic":"...","payload":"...","ts":"..."}
+        // They don't include iteration, hat, or triggered fields
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("events.jsonl");
+
+        // Write agent-style events (without iteration field)
+        let mut file = File::create(&path).unwrap();
+        writeln!(
+            file,
+            r#"{{"topic":"build.task","payload":"Implement auth","ts":"2024-01-15T10:00:00Z"}}"#
+        )
+        .unwrap();
+        writeln!(
+            file,
+            r#"{{"topic":"build.done","ts":"2024-01-15T10:30:00Z"}}"#
+        )
+        .unwrap();
+
+        // Should read without warnings (iteration defaults to 0)
+        let history = EventHistory::new(&path);
+        let records = history.read_all().unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].topic, "build.task");
+        assert_eq!(records[0].payload, "Implement auth");
+        assert_eq!(records[0].iteration, 0); // Defaults to 0
+        assert_eq!(records[0].hat, ""); // Defaults to empty string
+        assert_eq!(records[1].topic, "build.done");
+        assert_eq!(records[1].payload, ""); // Defaults to empty when not provided
+    }
+
+    #[test]
+    fn test_mixed_event_formats() {
+        // Test that both agent-written and Ralph-logged events can coexist
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("events.jsonl");
+
+        // Write a Ralph-logged event (full format)
+        let mut logger = EventLogger::new(&path);
+        let event = make_event("task.start", "Initial task");
+        logger.log_event(1, "loop", &event, Some(&HatId::new("planner"))).unwrap();
+
+        // Write an agent-style event (simple format)
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(
+            file,
+            r#"{{"topic":"build.task","payload":"Agent wrote this","ts":"2024-01-15T10:05:00Z"}}"#
+        )
+        .unwrap();
+
+        // Should read both without warnings
+        let history = EventHistory::new(&path);
+        let records = history.read_all().unwrap();
+
+        assert_eq!(records.len(), 2);
+        // First is Ralph's full-format event
+        assert_eq!(records[0].topic, "task.start");
+        assert_eq!(records[0].iteration, 1);
+        assert_eq!(records[0].hat, "loop");
+        // Second is agent's simple format
+        assert_eq!(records[1].topic, "build.task");
+        assert_eq!(records[1].iteration, 0); // Defaulted
+        assert_eq!(records[1].hat, ""); // Defaulted
     }
 }

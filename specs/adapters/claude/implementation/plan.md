@@ -2,15 +2,15 @@
 
 ## Checklist
 
-- [ ] Step 1: Add OutputFormat enum to CliBackend
-- [ ] Step 2: Create Claude stream event types
-- [ ] Step 3: Implement JSON line parser
-- [ ] Step 4: Create StreamHandler trait and ConsoleStreamHandler
-- [ ] Step 5: Add streaming support to PTY executor
-- [ ] Step 6: Add verbosity CLI flags to ralph run
-- [ ] Step 7: Wire up streaming in main execution path
-- [ ] Step 8: Add quiet mode support
-- [ ] Step 9: Integration testing and polish
+- [x] Step 1: Add OutputFormat enum to CliBackend
+- [x] Step 2: Create Claude stream event types
+- [x] Step 3: Implement JSON line parser
+- [x] Step 4: Create StreamHandler trait and ConsoleStreamHandler
+- [x] Step 5: Add streaming support to PTY executor
+- [x] Step 6: Add verbosity CLI flags to ralph run
+- [x] Step 7: Wire up streaming in main execution path
+- [x] Step 8: Add quiet mode support
+- [x] Step 9: Integration testing and polish
 
 ---
 
