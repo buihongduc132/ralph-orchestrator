@@ -35,6 +35,8 @@ env/
 *.swp
 *.swo
 *~
+*.bak
+*.orig
 .DS_Store
 
 # Ralph specific
