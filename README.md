@@ -105,6 +105,26 @@ ralph --version
 ralph --help
 ```
 
+### Migrating from v1 (Python)
+
+If you have the old Python-based Ralph v1 installed, uninstall it first to avoid conflicts:
+
+```bash
+# If installed via pip
+pip uninstall ralph-orchestrator
+
+# If installed via pipx
+pipx uninstall ralph-orchestrator
+
+# If installed via uv
+uv tool uninstall ralph-orchestrator
+
+# Verify removal
+which ralph  # Should return nothing or point to new Rust version
+```
+
+The v1 Python version is no longer maintained. See [v1.2.3](https://github.com/mikeyobrien/ralph-orchestrator/tree/v1.2.3) for historical reference.
+
 ## Quick Start
 
 ### 1. Initialize a Project
