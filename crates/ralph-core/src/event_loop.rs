@@ -324,13 +324,13 @@ impl EventLoop {
 
         // In multi-hat mode, always route to Ralph (custom hats define topology only)
         // Ralph's prompt includes the ## HATS section for coordination awareness
-        if !self.registry.is_empty() {
+        if self.registry.is_empty() {
+            // Solo mode - return the next hat (which is "ralph")
+            next
+        } else {
             // Return "ralph" - the constant coordinator
             // Find ralph in the bus's registered hats
             self.bus.hat_ids().find(|id| id.as_str() == "ralph")
-        } else {
-            // Solo mode - return the next hat (which is "ralph")
-            next
         }
     }
 
@@ -398,7 +398,18 @@ impl EventLoop {
         // Handle "ralph" hat - the constant coordinator
         // Per spec: "Hatless Ralph is constant — Cannot be replaced, overwritten, or configured away"
         if hat_id.as_str() == "ralph" {
-            if !self.registry.is_empty() {
+            if self.registry.is_empty() {
+                // Solo mode - just Ralph's events, no hats to filter
+                let events = self.bus.take_pending(&hat_id.clone());
+                let events_context = events
+                    .iter()
+                    .map(|e| format!("Event: {} - {}", e.topic, e.payload))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                debug!("build_prompt: routing to HatlessRalph (solo mode)");
+                return Some(self.ralph.build_prompt(&events_context, &[]));
+            } else {
                 // Multi-hat mode: collect events and determine active hats
                 let all_hat_ids: Vec<HatId> = self.bus.hat_ids().cloned().collect();
                 let mut all_events = Vec::new();
@@ -420,17 +431,6 @@ impl EventLoop {
                 debug!("build_prompt: routing to HatlessRalph (multi-hat coordinator mode), active_hats: {:?}",
                        active_hats.iter().map(|h| h.id.as_str()).collect::<Vec<_>>());
                 return Some(self.ralph.build_prompt(&events_context, &active_hats));
-            } else {
-                // Solo mode - just Ralph's events, no hats to filter
-                let events = self.bus.take_pending(&hat_id.clone());
-                let events_context = events
-                    .iter()
-                    .map(|e| format!("Event: {} - {}", e.topic, e.payload))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                debug!("build_prompt: routing to HatlessRalph (solo mode)");
-                return Some(self.ralph.build_prompt(&events_context, &[]));
             }
         }
 
@@ -961,10 +961,10 @@ hats:
 
     #[test]
     fn test_termination_max_iterations() {
-        let yaml = r#"
+        let yaml = r"
 event_loop:
   max_iterations: 2
-"#;
+";
         let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
         let mut event_loop = EventLoop::new(config);
         event_loop.state.iteration = 2;
@@ -1364,12 +1364,12 @@ hats:
         let ralph_id = HatId::new("ralph");
         
         // Simulate Ralph output with cancelled task
-        let output = r#"
+        let output = r"
 ## Tasks
 - [x] Task 1 completed
 - [~] Task 2 cancelled (too complex for current scope)
 - [ ] Task 3 pending
-"#;
+";
         
         // Process output - should not terminate since there are still pending tasks
         let reason = event_loop.process_output(&ralph_id, output, true);
@@ -1399,12 +1399,12 @@ hats:
         // Create scratchpad with completed and cancelled tasks
         let scratchpad_path = Path::new(".agent/scratchpad.md");
         fs::create_dir_all(scratchpad_path.parent().unwrap()).unwrap();
-        let scratchpad_content = r#"## Tasks
+        let scratchpad_content = r"## Tasks
 - [x] Core feature implemented
 - [x] Tests added
 - [~] Documentation update (cancelled: out of scope)
 - [~] Performance optimization (cancelled: not needed)
-"#;
+";
         fs::write(scratchpad_path, scratchpad_content).unwrap();
         
         // Simulate completion with some cancelled tasks
@@ -1474,6 +1474,7 @@ hats:
             "test-hat".to_string(),
             crate::config::HatConfig {
                 name: "test-hat".to_string(),
+                description: Some("Test hat for default publishes".to_string()),
                 triggers: vec!["task.start".to_string()],
                 publishes: vec!["task.done".to_string()],
                 instructions: "Test hat".to_string(),
@@ -1482,22 +1483,22 @@ hats:
             }
         );
         config.hats = hats;
-        
+
         let mut event_loop = EventLoop::new(config);
         event_loop.event_reader = crate::event_reader::EventReader::new(&events_path);
         event_loop.initialize("Test");
-        
+
         let hat_id = HatId::new("test-hat");
-        
+
         // Record event count before execution
         let before = event_loop.record_event_count();
-        
+
         // Hat executes but writes no events
         // (In real scenario, hat would write to events.jsonl, but we simulate none written)
-        
+
         // Check for default_publishes
         event_loop.check_default_publishes(&hat_id, before);
-        
+
         // Verify default event was injected
         assert!(event_loop.has_pending_events(), "Default event should be injected");
     }
@@ -1507,16 +1508,17 @@ hats:
         use tempfile::tempdir;
         use std::io::Write;
         use std::collections::HashMap;
-        
+
         let temp_dir = tempdir().unwrap();
         let events_path = temp_dir.path().join("events.jsonl");
-        
+
         let mut config = RalphConfig::default();
         let mut hats = HashMap::new();
         hats.insert(
             "test-hat".to_string(),
             crate::config::HatConfig {
                 name: "test-hat".to_string(),
+                description: Some("Test hat for default publishes".to_string()),
                 triggers: vec!["task.start".to_string()],
                 publishes: vec!["task.done".to_string()],
                 instructions: "Test hat".to_string(),
@@ -1525,24 +1527,24 @@ hats:
             }
         );
         config.hats = hats;
-        
+
         let mut event_loop = EventLoop::new(config);
         event_loop.event_reader = crate::event_reader::EventReader::new(&events_path);
         event_loop.initialize("Test");
-        
+
         let hat_id = HatId::new("test-hat");
-        
+
         // Record event count before execution
         let before = event_loop.record_event_count();
-        
+
         // Hat writes an event
         let mut file = std::fs::File::create(&events_path).unwrap();
         writeln!(file, r#"{{"topic":"task.done","ts":"2024-01-01T00:00:00Z"}}"#).unwrap();
         file.flush().unwrap();
-        
+
         // Check for default_publishes
         event_loop.check_default_publishes(&hat_id, before);
-        
+
         // Default should NOT be injected since hat wrote an event
         // The event from file should be read by event_reader
     }
@@ -1551,16 +1553,17 @@ hats:
     fn test_default_publishes_not_injected_when_not_configured() {
         use tempfile::tempdir;
         use std::collections::HashMap;
-        
+
         let temp_dir = tempdir().unwrap();
         let events_path = temp_dir.path().join("events.jsonl");
-        
+
         let mut config = RalphConfig::default();
         let mut hats = HashMap::new();
         hats.insert(
             "test-hat".to_string(),
             crate::config::HatConfig {
                 name: "test-hat".to_string(),
+                description: Some("Test hat for default publishes".to_string()),
                 triggers: vec!["task.start".to_string()],
                 publishes: vec!["task.done".to_string()],
                 instructions: "Test hat".to_string(),

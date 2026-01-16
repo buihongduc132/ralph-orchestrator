@@ -4,8 +4,8 @@
 # Produces structured feedback, identifies issues, suggests improvements.
 #
 # Usage:
-#   ralph start --config presets/review.yml --prompt "Review PR #123"
-#   ralph start --config presets/review.yml --prompt "Review changes in src/auth/"
+#   ralph run --config presets/review.yml --prompt "Review PR #123"
+#   ralph run --config presets/review.yml --prompt "Review changes in src/auth/"
 
 event_loop:
   prompt_file: "PROMPT.md"
@@ -24,6 +24,7 @@ core:
 hats:
   reviewer:
     name: "Code Reviewer"
+    description: "Reviews code for correctness, clarity, and maintainability."
     triggers: ["review.start", "analysis.complete"]
     publishes: ["review.section", "review.complete"]
     instructions: |
@@ -73,6 +74,7 @@ hats:
 
   analyzer:
     name: "Deep Analyzer"
+    description: "Performs thorough analysis of specific code sections."
     triggers: ["review.section"]
     publishes: ["analysis.complete"]
     instructions: |

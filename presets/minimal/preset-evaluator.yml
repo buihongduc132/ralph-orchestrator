@@ -34,6 +34,7 @@ core:
 hats:
   evaluator:
     name: "🧪 Preset Evaluator"
+    description: "Tests and documents Ralph's hat collection presets."
     triggers: ["evaluation.start"]
     publishes: ["evaluation.complete"]
     instructions: |

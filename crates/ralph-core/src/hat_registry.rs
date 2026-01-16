@@ -38,6 +38,7 @@ impl HatRegistry {
     /// Creates a Hat from HatConfig.
     fn hat_from_config(id: &str, config: &HatConfig) -> Hat {
         let mut hat = Hat::new(id, &config.name);
+        hat.description = config.description.clone().unwrap_or_default();
         hat.subscriptions = config.trigger_topics();
         hat.publishes = config.publish_topics();
         hat.instructions = config.instructions.clone();
@@ -288,8 +289,8 @@ hats:
         }
         let elapsed = start.elapsed();
 
-        let ops = (ITERATIONS as u64) * (topics.len() as u64);
-        let ns_per_op = elapsed.as_nanos() / ops as u128;
+        let ops = u64::from(ITERATIONS) * (topics.len() as u64);
+        let ns_per_op = elapsed.as_nanos() / u128::from(ops);
 
         println!("\n=== get_for_topic() Baseline ===");
         println!("Registry size: {} hats", registry.len());

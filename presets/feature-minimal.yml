@@ -4,7 +4,7 @@
 # Just define triggers/publishes - behaviors are injected automatically.
 #
 # Usage:
-#   ralph start --config presets/feature-minimal.yml --prompt "Add user authentication"
+#   ralph run --config presets/feature-minimal.yml --prompt "Add user authentication"
 
 event_loop:
   prompt_file: "PROMPT.md"
@@ -23,6 +23,7 @@ core:
 hats:
   builder:
     name: "Builder"
+    description: "Implements code changes. One task, one commit."
     triggers: ["build.task"]
     publishes: ["build.done", "build.blocked"]
     default_publishes: "build.done"
@@ -30,6 +31,7 @@ hats:
 
   reviewer:
     name: "Reviewer"
+    description: "Reviews implementation for quality. Does NOT modify code."
     triggers: ["review.request"]
     publishes: ["review.approved", "review.changes_requested"]
     default_publishes: "review.approved"

@@ -4,7 +4,7 @@
 # Includes a writer/editor/reviewer cycle for quality.
 #
 # Usage:
-#   ralph start --config presets/docs.yml --prompt "Write API documentation for the auth module"
+#   ralph run --config presets/docs.yml --prompt "Write API documentation for the auth module"
 
 event_loop:
   prompt_file: "PROMPT.md"
@@ -22,6 +22,7 @@ core:
 hats:
   writer:
     name: "Writer"
+    description: "Writes documentation sections with clarity and precision."
     triggers: ["write.section", "review.revision"]
     publishes: ["write.done"]
     default_publishes: "write.done"
@@ -59,6 +60,7 @@ hats:
 
   reviewer:
     name: "Doc Reviewer"
+    description: "Reviews documentation for accuracy, clarity, and completeness."
     triggers: ["write.done"]
     publishes: ["review.done", "review.revision"]
     default_publishes: "review.done"

@@ -32,6 +32,7 @@ core:
 hats:
   builder:
     name: "Builder"
+    description: "Builds directly from the prompt. No planning phase."
     triggers: ["task.start"]
     publishes: ["build.done", "build.blocked"]
     default_publishes: "build.done"

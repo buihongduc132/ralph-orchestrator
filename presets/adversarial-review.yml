@@ -1,6 +1,9 @@
 # Red Team / Blue Team Security Review
 # Pattern: Adversarial Critic-Actor
 # One agent builds, another actively tries to break it
+#
+# Usage:
+#   ralph run --config presets/adversarial-review.yml --prompt "Review authentication system"
 
 event_loop:
   starting_event: "security.review"  # Ralph publishes this after coordination
@@ -8,6 +11,7 @@ event_loop:
 hats:
   builder:
     name: "🔵 Blue Team (Builder)"
+    description: "Implements features with security in mind."
     triggers: ["security.review", "fix.applied"]
     publishes: ["build.ready"]
     instructions: |
@@ -25,6 +29,7 @@ hats:
 
   red_team:
     name: "🔴 Red Team (Attacker)"
+    description: "Penetration tester that actively tries to break the code."
     triggers: ["build.ready"]
     publishes: ["vulnerability.found", "security.approved"]
     instructions: |
@@ -53,6 +58,7 @@ hats:
 
   fixer:
     name: "🛡️ Security Fixer"
+    description: "Remediates security vulnerabilities with defense in depth."
     triggers: ["vulnerability.found"]
     publishes: ["fix.applied"]
     instructions: |

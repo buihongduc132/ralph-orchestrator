@@ -1,6 +1,9 @@
 # README-Driven Development
 # Pattern: Documentation-First
 # If you can't explain it simply, you don't understand it
+#
+# Usage:
+#   ralph run --config presets/documentation-first.yml --prompt "Build a CLI tool for file conversion"
 
 event_loop:
   starting_event: "docs.start"  # Ralph publishes this after coordination
@@ -8,6 +11,7 @@ event_loop:
 hats:
   documenter:
     name: "📝 Documenter"
+    description: "Writes documentation BEFORE any code exists."
     triggers: ["docs.start", "docs.rejected"]
     publishes: ["docs.ready"]
     instructions: |
@@ -39,6 +43,7 @@ hats:
 
   reviewer:
     name: "🔎 Docs Reviewer"
+    description: "Reviews docs for completeness. Can someone implement from this?"
     triggers: ["docs.ready"]
     publishes: ["docs.approved", "docs.rejected"]
     instructions: |
@@ -60,6 +65,7 @@ hats:
 
   implementer:
     name: "⚙️ Implementer"
+    description: "Implements to match the documentation exactly."
     triggers: ["docs.approved"]
     publishes: ["implementation.done"]
     instructions: |
@@ -74,6 +80,7 @@ hats:
 
   verifier:
     name: "✅ Docs Verifier"
+    description: "Verifies implementation matches documentation exactly."
     triggers: ["implementation.done"]
     publishes: ["task.complete"]
     default_publishes: "task.complete"

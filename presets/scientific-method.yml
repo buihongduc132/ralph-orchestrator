@@ -1,6 +1,9 @@
 # Scientific Method Debugging
 # Pattern: Hypothesis-Driven Investigation
 # Debug like a scientist—hypothesize, experiment, conclude
+#
+# Usage:
+#   ralph run --config presets/scientific-method.yml --prompt "Memory leak in background worker"
 
 event_loop:
   starting_event: "science.start"  # Ralph publishes this after coordination
@@ -8,6 +11,7 @@ event_loop:
 hats:
   observer:
     name: "🔬 Observer"
+    description: "Gathers factual observations about the bug systematically."
     triggers: ["science.start", "hypothesis.rejected"]
     publishes: ["observation.made"]
     instructions: |
@@ -27,6 +31,7 @@ hats:
 
   theorist:
     name: "🧠 Theorist"
+    description: "Forms testable hypotheses about the root cause."
     triggers: ["observation.made"]
     publishes: ["hypothesis.formed"]
     instructions: |
@@ -46,6 +51,7 @@ hats:
 
   experimenter:
     name: "🧪 Experimenter"
+    description: "Designs and runs experiments to test hypotheses."
     triggers: ["hypothesis.formed"]
     publishes: ["hypothesis.confirmed", "hypothesis.rejected"]
     instructions: |
@@ -63,6 +69,7 @@ hats:
 
   fixer:
     name: "🔧 Fixer"
+    description: "Applies fix based on confirmed hypothesis with regression test."
     triggers: ["hypothesis.confirmed"]
     publishes: ["fix.applied"]
     default_publishes: "fix.applied"

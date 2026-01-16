@@ -26,6 +26,7 @@ core:
 hats:
   builder:
     name: "Code Assist Builder"
+    description: "TDD-based implementation: Explore, Plan, Code, Commit."
     triggers: ["build.task", "task.start"]
     publishes: ["build.done", "build.blocked"]
     instructions: |

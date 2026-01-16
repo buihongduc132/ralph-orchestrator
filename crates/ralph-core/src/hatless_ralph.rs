@@ -24,6 +24,7 @@ pub struct HatTopology {
 /// Information about a hat for prompt generation.
 pub struct HatInfo {
     pub name: String,
+    pub description: String,
     pub subscribes_to: Vec<String>,
     pub publishes: Vec<String>,
     pub instructions: String,
@@ -36,6 +37,7 @@ impl HatTopology {
             .all()
             .map(|hat| HatInfo {
                 name: hat.name.clone(),
+                description: hat.description.clone(),
                 subscribes_to: hat.subscriptions.iter().map(|t| t.as_str().to_string()).collect(),
                 publishes: hat.publishes.iter().map(|t| t.as_str().to_string()).collect(),
                 instructions: hat.instructions.clone(),
@@ -95,7 +97,15 @@ impl HatlessRalph {
             prompt.push_str("\n\n");
         }
 
-        prompt.push_str(&self.workflow_section());
+        // Check if any active hat has custom instructions
+        // If so, skip the generic workflow - the hat's instructions ARE the workflow
+        let has_custom_workflow = active_hats
+            .iter()
+            .any(|h| !h.instructions.trim().is_empty());
+
+        if !has_custom_workflow {
+            prompt.push_str(&self.workflow_section());
+        }
 
         if let Some(topology) = &self.hat_topology {
             prompt.push_str(&self.hats_section(topology, active_hats));
@@ -190,12 +200,6 @@ Update `{scratchpad}` with prioritized tasks.
 You have one job. Publish ONE event to hand off to specialized hats. Do
 NOT do any work.
 
-**CRITICAL: STOP after publishing the event.** A new iteration will start
-with fresh context to handle the work. Do NOT continue working in this
-iteration — let the next iteration handle the event with the appropriate
-hat persona. By doing the work now, you won't have the specialty to do
-an even better job.
-
 ",
                 scratchpad = self.core.scratchpad
             )
@@ -236,17 +240,54 @@ Until all tasks `[x]` or `[~]`.
             ));
         }
 
-        // Build hat table - ALWAYS shows ALL hats for context
-        section.push_str("| Hat | Triggers On | Publishes |\n");
-        section.push_str("|-----|-------------|----------|\n");
+        // Derive Ralph's triggers and publishes from topology
+        // Ralph triggers on: task.start + all hats' publishes (results Ralph handles)
+        // Ralph publishes: all hats' subscribes_to (events Ralph can emit to delegate)
+        let mut ralph_triggers: Vec<&str> = vec!["task.start"];
+        let mut ralph_publishes: Vec<&str> = Vec::new();
 
+        for hat in &topology.hats {
+            for pub_event in &hat.publishes {
+                if !ralph_triggers.contains(&pub_event.as_str()) {
+                    ralph_triggers.push(pub_event.as_str());
+                }
+            }
+            for sub_event in &hat.subscribes_to {
+                if !ralph_publishes.contains(&sub_event.as_str()) {
+                    ralph_publishes.push(sub_event.as_str());
+                }
+            }
+        }
+
+        // Build hat table with Description column - ALWAYS shows ALL hats for context
+        section.push_str("| Hat | Triggers On | Publishes | Description |\n");
+        section.push_str("|-----|-------------|----------|-------------|\n");
+
+        // Add Ralph coordinator row first
+        section.push_str(&format!(
+            "| Ralph | {} | {} | Coordinates workflow, delegates to specialized hats |\n",
+            ralph_triggers.join(", "),
+            ralph_publishes.join(", ")
+        ));
+
+        // Add all other hats
         for hat in &topology.hats {
             let subscribes = hat.subscribes_to.join(", ");
             let publishes = hat.publishes.join(", ");
-            section.push_str(&format!("| {} | {} | {} |\n", hat.name, subscribes, publishes));
+            section.push_str(&format!(
+                "| {} | {} | {} | {} |\n",
+                hat.name, subscribes, publishes, hat.description
+            ));
         }
 
         section.push('\n');
+
+        // Generate Mermaid topology diagram
+        section.push_str(&self.generate_mermaid_diagram(topology, &ralph_publishes));
+        section.push('\n');
+
+        // Validate topology and log warnings for unreachable hats
+        self.validate_topology_reachability(topology);
 
         // Add instructions sections ONLY for active hats
         // If the slice is empty, no instructions are added (no active hats)
@@ -262,6 +303,97 @@ Until all tasks `[x]` or `[~]`.
         }
 
         section
+    }
+
+    /// Generates a Mermaid flowchart showing event flow between hats.
+    fn generate_mermaid_diagram(&self, topology: &HatTopology, ralph_publishes: &[&str]) -> String {
+        let mut diagram = String::from("```mermaid\nflowchart LR\n");
+
+        // Entry point: task.start -> Ralph
+        diagram.push_str("    task.start((task.start)) --> Ralph\n");
+
+        // Ralph -> hats (via ralph_publishes which are hat triggers)
+        for hat in &topology.hats {
+            for trigger in &hat.subscribes_to {
+                if ralph_publishes.contains(&trigger.as_str()) {
+                    // Sanitize hat name for Mermaid (remove emojis and special chars for node ID)
+                    let node_id = hat.name.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+                    if node_id == hat.name {
+                        diagram.push_str(&format!("    Ralph -->|{}| {}\n", trigger, hat.name));
+                    } else {
+                        // If name has special chars, use label syntax
+                        diagram.push_str(&format!(
+                            "    Ralph -->|{}| {}[{}]\n",
+                            trigger, node_id, hat.name
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Hats -> Ralph (via hat publishes)
+        for hat in &topology.hats {
+            let node_id = hat.name.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+            for pub_event in &hat.publishes {
+                diagram.push_str(&format!("    {} -->|{}| Ralph\n", node_id, pub_event));
+            }
+        }
+
+        // Hat -> Hat connections (when one hat publishes what another triggers on)
+        for source_hat in &topology.hats {
+            let source_id = source_hat.name.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+            for pub_event in &source_hat.publishes {
+                for target_hat in &topology.hats {
+                    if target_hat.name != source_hat.name && target_hat.subscribes_to.contains(pub_event) {
+                        let target_id = target_hat.name.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+                        diagram.push_str(&format!(
+                            "    {} -->|{}| {}\n",
+                            source_id, pub_event, target_id
+                        ));
+                    }
+                }
+            }
+        }
+
+        diagram.push_str("```\n");
+        diagram
+    }
+
+    /// Validates that all hats are reachable from task.start.
+    /// Logs warnings for unreachable hats but doesn't fail.
+    fn validate_topology_reachability(&self, topology: &HatTopology) {
+        use std::collections::HashSet;
+        use tracing::warn;
+
+        // Collect all events that are published (reachable)
+        let mut reachable_events: HashSet<&str> = HashSet::new();
+        reachable_events.insert("task.start");
+
+        // Ralph publishes all hat triggers, so add those
+        for hat in &topology.hats {
+            for trigger in &hat.subscribes_to {
+                reachable_events.insert(trigger.as_str());
+            }
+        }
+
+        // Now add all events published by hats (they become reachable after hat runs)
+        for hat in &topology.hats {
+            for pub_event in &hat.publishes {
+                reachable_events.insert(pub_event.as_str());
+            }
+        }
+
+        // Check each hat's triggers - warn if none of them are reachable
+        for hat in &topology.hats {
+            let hat_reachable = hat.subscribes_to.iter().any(|t| reachable_events.contains(t.as_str()));
+            if !hat_reachable {
+                warn!(
+                    hat = %hat.name,
+                    triggers = ?hat.subscribes_to,
+                    "Hat has triggers that are never published - it may be unreachable"
+                );
+            }
+        }
     }
 
     fn event_writing_section(&self) -> String {
@@ -280,6 +412,11 @@ ralph emit "review.done" --json '{{"status": "approved", "issues": 0}}'
 
 For detailed output, write to `{scratchpad}` and emit a brief event.
 
+**CRITICAL: STOP after publishing the event.** A new iteration will start
+with fresh context to handle the work. Do NOT continue working in this
+iteration — let the next iteration handle the event with the appropriate
+hat persona. By doing the work now, you won't be wearing the correct hat 
+the specialty to do an even better job.
 "#,
             scratchpad = self.core.scratchpad
         )
@@ -671,8 +808,8 @@ hats:
         let registry = HatRegistry::new();
         let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
 
-        let events_context = r#"[task.start] User's task: Review this code for security vulnerabilities
-[build.done] Build completed successfully"#;
+        let events_context = r"[task.start] User's task: Review this code for security vulnerabilities
+[build.done] Build completed successfully";
 
         let prompt = ralph.build_prompt(events_context, &[]);
 

@@ -25,16 +25,23 @@ core:
     - "Don't assume 'not implemented' - search first"
     - "Backpressure is law - tests/typecheck/lint must pass"
 
-# Default hats: planner and builder
 hats:
-  planner:
-    name: "Planner"
-    triggers: ["task.start", "build.done", "build.blocked"]
-    publishes: ["build.task"]
-    instructions: ""            # Empty = use default rich prompt
-
   builder:
     name: "Builder"
+    description: "Implements code, creates files, runs tests. Does the actual work."
     triggers: ["build.task"]
     publishes: ["build.done", "build.blocked"]
-    instructions: ""            # Empty = use default rich prompt
+    instructions: |
+      ## WORKFLOW
+
+      You are Builder. Your job is to IMPLEMENT - write code, create files, run tests.
+
+      1. Read the build.task event payload - that's your task
+      2. IMPLEMENT: Create files, write code, run commands
+      3. VERIFY: Run tests/builds to confirm it works
+      4. COMPLETE: Emit build.done when verified, or build.blocked if stuck
+
+      RULES:
+      - Do the actual work - don't just plan or delegate
+      - Never emit build.task (that's for coordination, not you)
+

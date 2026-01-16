@@ -48,6 +48,10 @@ pub struct Hat {
     /// Human-readable name for the hat.
     pub name: String,
 
+    /// Short description of the hat's purpose.
+    /// Used in the HATS table to help Ralph understand when to delegate.
+    pub description: String,
+
     /// Topic patterns this hat subscribes to.
     pub subscriptions: Vec<Topic>,
 
@@ -64,10 +68,18 @@ impl Hat {
         Self {
             id: id.into(),
             name: name.into(),
+            description: String::new(),
             subscriptions: Vec::new(),
             publishes: Vec::new(),
             instructions: String::new(),
         }
+    }
+
+    /// Sets the description for this hat.
+    #[must_use]
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
     }
 
     /// Creates the default hat for single-hat mode.
@@ -76,6 +88,7 @@ impl Hat {
         Self {
             id: HatId::new("default"),
             name: "Default".to_string(),
+            description: "Default single-hat mode handler".to_string(),
             subscriptions: vec![Topic::new("*")],
             publishes: vec![Topic::new("task.done")],
             instructions: String::new(),
@@ -90,6 +103,7 @@ impl Hat {
         Self {
             id: HatId::new("planner"),
             name: "Planner".to_string(),
+            description: "Plans and prioritizes tasks, delegates to Builder".to_string(),
             subscriptions: vec![
                 Topic::new("task.start"),
                 Topic::new("task.resume"),
@@ -109,6 +123,7 @@ impl Hat {
         Self {
             id: HatId::new("builder"),
             name: "Builder".to_string(),
+            description: "Implements code changes, runs backpressure".to_string(),
             subscriptions: vec![Topic::new("build.task")],
             publishes: vec![
                 Topic::new("build.done"),

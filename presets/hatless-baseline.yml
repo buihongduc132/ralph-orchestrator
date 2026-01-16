@@ -7,7 +7,7 @@
 # This validates: event loop, scratchpad, completion detection, basic tool use.
 #
 # Usage:
-#   ralph start --config presets/hatless-baseline.yml --prompt "Implement a fibonacci function"
+#   ralph run --config presets/hatless-baseline.yml --prompt "Implement a fibonacci function"
 
 event_loop:
   prompt_file: "PROMPT.md"

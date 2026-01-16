@@ -4,7 +4,7 @@
 # Planner → Builder → Deployer → Verifier cycle for safe deployments.
 #
 # Usage:
-#   ralph start --config presets/deploy.yml --prompt "Deploy v2.0 to staging"
+#   ralph run --config presets/deploy.yml --prompt "Deploy v2.0 to staging"
 
 event_loop:
   prompt_file: "PROMPT.md"
@@ -60,6 +60,7 @@ events:
 hats:
   builder:
     name: "Builder"
+    description: "Builds artifacts for deployment."
     triggers: ["build.task"]
     publishes: ["build.done", "build.blocked"]
     default_publishes: "build.done"
@@ -67,6 +68,7 @@ hats:
 
   deployer:
     name: "Deployer"
+    description: "Executes deployment steps and handles rollbacks."
     triggers: ["deploy.ready", "deploy.start", "deploy.rollback"]
     publishes: ["deploy.start", "deploy.done", "deploy.failed"]
     default_publishes: "deploy.done"
@@ -74,6 +76,7 @@ hats:
 
   verifier:
     name: "Verifier"
+    description: "Verifies deployment success via health checks and smoke tests."
     triggers: ["deploy.done"]
     publishes: ["verify.pass", "verify.fail", "deploy.rollback"]
     default_publishes: "verify.pass"

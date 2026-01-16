@@ -4,7 +4,7 @@
 # Emphasizes: test before, change, test after, verify behavior preserved.
 #
 # Usage:
-#   ralph start --config presets/refactor.yml --prompt "Extract the auth logic into a separate module"
+#   ralph run --config presets/refactor.yml --prompt "Extract the auth logic into a separate module"
 
 event_loop:
   prompt_file: "PROMPT.md"
@@ -23,6 +23,7 @@ core:
 hats:
   refactorer:
     name: "Refactorer"
+    description: "Executes one atomic refactoring step safely with verification."
     triggers: ["refactor.task"]
     publishes: ["refactor.done", "refactor.blocked"]
     default_publishes: "refactor.done"
@@ -69,6 +70,7 @@ hats:
 
   verifier:
     name: "Verifier"
+    description: "Verifies refactoring preserved behavior via tests and checks."
     triggers: ["refactor.done"]
     publishes: ["verify.passed", "verify.failed"]
     default_publishes: "verify.passed"

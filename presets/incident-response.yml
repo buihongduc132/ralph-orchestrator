@@ -1,6 +1,9 @@
 # Production Incident Response
 # Pattern: OODA Loop (Observe-Orient-Decide-Act)
 # Fast, structured response to production issues
+#
+# Usage:
+#   ralph run --config presets/incident-response.yml --prompt "API latency spike in production"
 
 event_loop:
   starting_event: "incident.start"  # Ralph publishes this after coordination
@@ -8,6 +11,7 @@ event_loop:
 hats:
   observer:
     name: "👁️ Observer"
+    description: "Rapidly assesses incident severity and impact. Speed matters."
     triggers: ["incident.start"]
     publishes: ["situation.assessed"]
     instructions: |
@@ -27,6 +31,7 @@ hats:
 
   mitigator:
     name: "🚨 Mitigator"
+    description: "Stops the bleeding NOW. Rollback, feature flags, or scaling."
     triggers: ["situation.assessed", "mitigation.failed"]
     publishes: ["mitigation.applied", "mitigation.failed"]
     instructions: |
@@ -47,6 +52,7 @@ hats:
 
   investigator:
     name: "🔍 Root Cause Investigator"
+    description: "Investigates root cause after impact is mitigated."
     triggers: ["mitigation.applied"]
     publishes: ["root_cause.found"]
     instructions: |
@@ -68,6 +74,7 @@ hats:
 
   fixer:
     name: "🔧 Permanent Fixer"
+    description: "Implements permanent fix with monitoring and regression test."
     triggers: ["root_cause.found"]
     publishes: ["incident.resolved"]
     default_publishes: "incident.resolved"

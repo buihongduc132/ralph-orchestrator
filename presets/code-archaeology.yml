@@ -1,6 +1,9 @@
 # Code Archaeology — Legacy Code Understanding
 # Pattern: Archaeological Dig
 # Understand before you change
+#
+# Usage:
+#   ralph run --config presets/code-archaeology.yml --prompt "Understand the payment processing module"
 
 event_loop:
   starting_event: "archaeology.start"  # Ralph publishes this after coordination
@@ -8,6 +11,7 @@ event_loop:
 hats:
   surveyor:
     name: "🗺️ Surveyor"
+    description: "Creates a map of code territory, data flow, and dependencies."
     triggers: ["archaeology.start"]
     publishes: ["map.created"]
     instructions: |
@@ -31,6 +35,7 @@ hats:
 
   historian:
     name: "📜 Historian"
+    description: "Researches code history via git to understand the why."
     triggers: ["map.created"]
     publishes: ["history.documented"]
     instructions: |
@@ -52,6 +57,7 @@ hats:
 
   archaeologist:
     name: "⛏️ Archaeologist"
+    description: "Identifies hidden assumptions, technical debt, and gotchas."
     triggers: ["history.documented"]
     publishes: ["artifacts.catalogued"]
     instructions: |
@@ -70,6 +76,7 @@ hats:
 
   modifier:
     name: "🔨 Careful Modifier"
+    description: "Makes minimal changes informed by archaeology findings."
     triggers: ["artifacts.catalogued"]
     publishes: ["change.complete"]
     default_publishes: "change.complete"

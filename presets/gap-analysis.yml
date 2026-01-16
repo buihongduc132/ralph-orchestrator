@@ -68,6 +68,7 @@ core:
 hats:
   analyzer:
     name: "Gap Analyzer"
+    description: "Coordinates gap analysis between specs and implementation."
     triggers: ["gap.start", "verify.complete", "report.complete"]
     publishes: ["analyze.spec", "verify.request", "report.request"]
     instructions: |
@@ -112,6 +113,7 @@ hats:
 
   verifier:
     name: "Implementation Verifier"
+    description: "Deep-dives into code to verify spec compliance."
     triggers: ["analyze.spec", "verify.request"]
     publishes: ["verify.complete"]
     instructions: |
@@ -143,6 +145,7 @@ hats:
 
   reporter:
     name: "Gap Reporter"
+    description: "Compiles findings into structured ISSUES.md report."
     triggers: ["report.request"]
     publishes: ["report.complete"]
     instructions: |

@@ -6,7 +6,7 @@
 # Key behavior: NO code changes, NO commits. Pure information gathering.
 #
 # Usage:
-#   ralph start --config presets/research.yml --prompt "Analyze the authentication flow"
+#   ralph run --config presets/research.yml --prompt "Analyze the authentication flow"
 
 event_loop:
   prompt_file: "PROMPT.md"
@@ -25,6 +25,7 @@ core:
 hats:
   researcher:
     name: "Researcher"
+    description: "Gathers information and analyzes patterns. No code changes."
     triggers: ["research.start", "research.followup"]
     publishes: ["research.finding", "research.question"]
     instructions: |
@@ -68,6 +69,7 @@ hats:
 
   synthesizer:
     name: "Synthesizer"
+    description: "Reviews findings and creates coherent summary."
     triggers: ["research.finding"]
     publishes: ["research.followup", "synthesis.complete"]
     instructions: |

@@ -1,6 +1,9 @@
 # TDD Red-Green-Refactor Workflow
 # Pattern: Critic-Actor Pipeline
 # Forces discipline: failing test → implementation → refactor
+#
+# Usage:
+#   ralph run --config presets/tdd-red-green.yml --prompt "Implement a binary search tree"
 
 event_loop:
   starting_event: "tdd.start"  # Ralph publishes this after coordination
@@ -8,6 +11,7 @@ event_loop:
 hats:
   test_writer:
     name: "🔴 Test Writer"
+    description: "Writes FAILING tests first. Never implements. Tests only."
     triggers: ["tdd.start", "refactor.done"]
     publishes: ["test.written"]
     instructions: |
@@ -23,6 +27,7 @@ hats:
 
   implementer:
     name: "🟢 Implementer"
+    description: "Makes failing test pass with MINIMAL code. No extras."
     triggers: ["test.written"]
     publishes: ["test.passing"]
     instructions: |
@@ -38,6 +43,7 @@ hats:
 
   refactorer:
     name: "🔵 Refactorer"
+    description: "Cleans up code while keeping tests green."
     triggers: ["test.passing"]
     publishes: ["refactor.done", "cycle.complete"]
     default_publishes: "cycle.complete"

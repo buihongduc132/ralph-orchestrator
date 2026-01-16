@@ -1,6 +1,9 @@
 # Socratic Learning — Teaching Through Questions
 # Pattern: Socratic Dialogue
 # Learn by being questioned, not lectured
+#
+# Usage:
+#   ralph run --config presets/socratic-learning.yml --prompt "Teach me about async/await in Rust"
 
 event_loop:
   starting_event: "learn.start"  # Ralph publishes this after coordination
@@ -8,6 +11,7 @@ event_loop:
 hats:
   explorer:
     name: "🔍 Explorer"
+    description: "Explores codebase and forms understanding with evidence."
     triggers: ["learn.start", "answer.provided"]
     publishes: ["understanding.claimed"]
     instructions: |
@@ -25,6 +29,7 @@ hats:
 
   questioner:
     name: "❓ Socratic Questioner"
+    description: "Challenges understanding with probing questions."
     triggers: ["understanding.claimed"]
     publishes: ["question.asked", "understanding.verified"]
     instructions: |
@@ -48,6 +53,7 @@ hats:
 
   answerer:
     name: "💡 Answer Synthesizer"
+    description: "Researches and answers Socratic questions with evidence."
     triggers: ["question.asked"]
     publishes: ["answer.provided"]
     instructions: |

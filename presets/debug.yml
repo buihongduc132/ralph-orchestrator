@@ -4,7 +4,7 @@
 # Follows scientific method: hypothesize, test, narrow down.
 #
 # Usage:
-#   ralph start --config presets/debug.yml --prompt "Tests fail intermittently in CI"
+#   ralph run --config presets/debug.yml --prompt "Tests fail intermittently in CI"
 
 event_loop:
   prompt_file: "PROMPT.md"
@@ -23,6 +23,7 @@ core:
 hats:
   investigator:
     name: "Investigator"
+    description: "Finds root cause through systematic investigation."
     triggers: ["debug.start", "hypothesis.rejected", "hypothesis.confirmed", "fix.verified"]
     publishes: ["hypothesis.test", "fix.propose"]
     instructions: |
@@ -74,6 +75,7 @@ hats:
 
   tester:
     name: "Hypothesis Tester"
+    description: "Designs and runs experiments to test hypotheses."
     triggers: ["hypothesis.test"]
     publishes: ["hypothesis.confirmed", "hypothesis.rejected"]
     instructions: |
@@ -100,6 +102,7 @@ hats:
 
   fixer:
     name: "Bug Fixer"
+    description: "Implements fix for confirmed root cause with regression test."
     triggers: ["fix.propose", "fix.failed"]
     publishes: ["fix.applied", "fix.blocked"]
     instructions: |
@@ -130,6 +133,7 @@ hats:
 
   verifier:
     name: "Fix Verifier"
+    description: "Verifies the fix solves the original problem."
     triggers: ["fix.applied"]
     publishes: ["fix.verified", "fix.failed"]
     instructions: |

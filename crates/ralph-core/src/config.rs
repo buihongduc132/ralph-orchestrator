@@ -353,6 +353,15 @@ impl RalphConfig {
             });
         }
 
+        // Check for required description field on all hats
+        for (hat_id, hat_config) in &self.hats {
+            if hat_config.description.as_ref().is_none_or(|d| d.trim().is_empty()) {
+                return Err(ConfigError::MissingDescription {
+                    hat: hat_id.clone(),
+                });
+            }
+        }
+
         // Check for reserved triggers: task.start and task.resume are reserved for Ralph
         // Per design: Ralph coordinates first, then delegates to custom hats via events
         const RESERVED_TRIGGERS: &[&str] = &["task.start", "task.resume"];
@@ -765,6 +774,10 @@ pub struct HatConfig {
     /// Human-readable name for the hat.
     pub name: String,
 
+    /// Short description of the hat's purpose (required).
+    /// Used in the HATS table to help Ralph understand when to delegate to this hat.
+    pub description: Option<String>,
+
     /// Events that trigger this hat to be worn.
     /// Per spec: "Hats define triggers — which events cause Ralph to wear this hat."
     #[serde(default)]
@@ -826,6 +839,9 @@ pub enum ConfigError {
 
     #[error("Reserved trigger '{trigger}' used by hat '{hat}' - task.start and task.resume are reserved for Ralph (the coordinator). Use a delegated event like 'work.start' instead.")]
     ReservedTrigger { trigger: String, hat: String },
+
+    #[error("Hat '{hat}' is missing required 'description' field - add a short description of the hat's purpose")]
+    MissingDescription { hat: String },
 }
 
 #[cfg(test)]
@@ -899,10 +915,10 @@ verbose: true
 
     #[test]
     fn test_agent_priority() {
-        let yaml = r#"
+        let yaml = r"
 agent: auto
 agent_priority: [gemini, claude, codex]
-"#;
+";
         let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
         let priority = config.get_agent_priority();
         assert_eq!(priority, vec!["gemini", "claude", "codex"]);
@@ -917,10 +933,10 @@ agent_priority: [gemini, claude, codex]
 
     #[test]
     fn test_validate_deferred_features() {
-        let yaml = r#"
+        let yaml = r"
 archive_prompts: true
 enable_metrics: true
-"#;
+";
         let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
         let warnings = config.validate().unwrap();
 
@@ -959,11 +975,11 @@ adapters:
 
     #[test]
     fn test_suppress_warnings() {
-        let yaml = r#"
+        let yaml = r"
 _suppress_warnings: true
 archive_prompts: true
 max_tokens: 4096
-"#;
+";
         let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
         let warnings = config.validate().unwrap();
 
@@ -973,7 +989,7 @@ max_tokens: 4096
 
     #[test]
     fn test_adapter_settings() {
-        let yaml = r#"
+        let yaml = r"
 adapters:
   claude:
     timeout: 600
@@ -981,7 +997,7 @@ adapters:
   gemini:
     timeout: 300
     enabled: false
-"#;
+";
         let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
 
         let claude = config.adapter_settings("claude");
@@ -1014,9 +1030,11 @@ future_feature: true
 hats:
   planner:
     name: "Planner"
+    description: "Plans tasks"
     triggers: ["planning.start", "build.done"]
   builder:
     name: "Builder"
+    description: "Builds code"
     triggers: ["build.task", "build.done"]
 "#;
         let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
@@ -1039,9 +1057,11 @@ hats:
 hats:
   planner:
     name: "Planner"
+    description: "Plans tasks"
     triggers: ["planning.start", "build.done", "build.blocked"]
   builder:
     name: "Builder"
+    description: "Builds code"
     triggers: ["build.task"]
 "#;
         let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
@@ -1057,6 +1077,7 @@ hats:
 hats:
   my_hat:
     name: "My Hat"
+    description: "Test hat"
     triggers: ["task.start"]
 "#;
         let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
@@ -1079,6 +1100,7 @@ hats:
 hats:
   my_hat:
     name: "My Hat"
+    description: "Test hat"
     triggers: ["task.resume", "other.event"]
 "#;
         let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
@@ -1090,6 +1112,49 @@ hats:
             matches!(&err, ConfigError::ReservedTrigger { trigger, hat }
                 if trigger == "task.resume" && hat == "my_hat"),
             "Expected ReservedTrigger error for 'task.resume', got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_missing_description_rejected() {
+        // Description is required for all hats
+        let yaml = r#"
+hats:
+  my_hat:
+    name: "My Hat"
+    triggers: ["build.task"]
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let result = config.validate();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::MissingDescription { hat } if hat == "my_hat"),
+            "Expected MissingDescription error, got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_empty_description_rejected() {
+        // Empty description should also be rejected
+        let yaml = r#"
+hats:
+  my_hat:
+    name: "My Hat"
+    description: "   "
+    triggers: ["build.task"]
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let result = config.validate();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::MissingDescription { hat } if hat == "my_hat"),
+            "Expected MissingDescription error for empty description, got: {:?}",
             err
         );
     }

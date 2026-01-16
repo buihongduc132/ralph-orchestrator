@@ -1,6 +1,9 @@
 # Consumer-Driven API Design
 # Pattern: Outside-In Design
 # Design APIs from the consumer's perspective
+#
+# Usage:
+#   ralph run --config presets/api-design.yml --prompt "Design REST API for user management"
 
 event_loop:
   starting_event: "api.start"  # Ralph publishes this after coordination
@@ -8,6 +11,7 @@ event_loop:
 hats:
   consumer:
     name: "👤 API Consumer"
+    description: "Writes usage examples as if the API already exists."
     triggers: ["api.start", "api.refined"]
     publishes: ["usage.examples"]
     instructions: |
@@ -31,6 +35,7 @@ hats:
 
   designer:
     name: "✏️ API Designer"
+    description: "Designs API interfaces, signatures, and error types."
     triggers: ["usage.examples"]
     publishes: ["api.designed"]
     instructions: |
@@ -52,6 +57,7 @@ hats:
 
   critic:
     name: "🎯 API Critic"
+    description: "Reviews API design for usability issues and footguns."
     triggers: ["api.designed"]
     publishes: ["api.approved", "api.refined"]
     instructions: |
@@ -71,6 +77,7 @@ hats:
 
   implementer:
     name: "🔧 Implementer"
+    description: "Implements the approved API design exactly as specified."
     triggers: ["api.approved"]
     publishes: ["task.complete"]
     default_publishes: "task.complete"

@@ -1,6 +1,9 @@
 # Virtual Mob Programming Session
 # Pattern: Rotating Roles
 # Multiple perspectives on the same code
+#
+# Usage:
+#   ralph run --config presets/mob-programming.yml --prompt "Implement OAuth2 flow"
 
 event_loop:
   starting_event: "mob.start"  # Ralph publishes this after coordination
@@ -8,6 +11,7 @@ event_loop:
 hats:
   navigator:
     name: "🧭 Navigator"
+    description: "Thinks strategically, gives clear instructions to driver."
     triggers: ["mob.start", "observation.noted"]
     publishes: ["direction.set", "mob.complete"]
     instructions: |
@@ -30,6 +34,7 @@ hats:
 
   driver:
     name: "⌨️ Driver"
+    description: "Executes navigator's instructions exactly. Hands, not brain."
     triggers: ["direction.set"]
     publishes: ["code.written"]
     instructions: |
@@ -47,6 +52,7 @@ hats:
 
   observer:
     name: "👁️ Observer"
+    description: "Provides fresh-eyes feedback on what was just written."
     triggers: ["code.written"]
     publishes: ["observation.noted"]
     instructions: |

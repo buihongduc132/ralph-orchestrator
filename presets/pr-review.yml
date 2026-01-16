@@ -25,6 +25,7 @@ core:
 hats:
   correctness_reviewer:
     name: "🎯 Correctness Reviewer"
+    description: "Reviews code for logical correctness and requirement alignment."
     triggers: ["review.correctness"]
     publishes: ["correctness.done", "correctness.blocked"]
     default_publishes: "correctness.done"
@@ -66,6 +67,7 @@ hats:
 
   security_reviewer:
     name: "🔒 Security Reviewer"
+    description: "Reviews code for security vulnerabilities."
     triggers: ["review.security"]
     publishes: ["security.done", "security.blocked"]
     default_publishes: "security.done"
@@ -110,6 +112,7 @@ hats:
 
   architecture_reviewer:
     name: "🏗️ Architecture Reviewer"
+    description: "Reviews code for architectural fit and maintainability."
     triggers: ["review.architecture"]
     publishes: ["architecture.done", "architecture.blocked"]
     default_publishes: "architecture.done"
@@ -151,6 +154,7 @@ hats:
 
   synthesizer:
     name: "📋 Review Synthesizer"
+    description: "Combines all review feedback into a final PR review."
     triggers: ["synthesis.request"]
     publishes: ["review.complete"]
     default_publishes: "review.complete"

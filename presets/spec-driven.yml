@@ -1,6 +1,9 @@
 # Specification-First Development
 # Pattern: Contract-First Pipeline
 # The spec is the contract. Implementation follows.
+#
+# Usage:
+#   ralph run --config presets/spec-driven.yml --prompt "Build a rate limiter"
 
 event_loop:
   starting_event: "spec.start"  # Ralph publishes this after coordination
@@ -8,6 +11,7 @@ event_loop:
 hats:
   spec_writer:
     name: "📋 Spec Writer"
+    description: "Creates precise, unambiguous specifications with examples."
     triggers: ["spec.start", "spec.rejected"]
     publishes: ["spec.ready"]
     instructions: |
@@ -28,6 +32,7 @@ hats:
 
   spec_reviewer:
     name: "🔎 Spec Critic"
+    description: "Reviews spec for completeness. Could someone implement from this?"
     triggers: ["spec.ready"]
     publishes: ["spec.approved", "spec.rejected"]
     instructions: |
@@ -46,6 +51,7 @@ hats:
 
   implementer:
     name: "⚙️ Implementer"
+    description: "Implements EXACTLY what the spec says. No creative interpretation."
     triggers: ["spec.approved", "spec.violated"]
     publishes: ["implementation.done"]
     instructions: |
@@ -62,6 +68,7 @@ hats:
 
   verifier:
     name: "✅ Spec Verifier"
+    description: "Verifies implementation matches spec exactly."
     triggers: ["implementation.done"]
     publishes: ["task.complete", "spec.violated"]
     default_publishes: "task.complete"
