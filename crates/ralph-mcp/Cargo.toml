@@ -25,3 +25,7 @@ tracing.workspace = true
 
 rmcp.workspace = true
 schemars.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+wait-timeout = "0.2"
