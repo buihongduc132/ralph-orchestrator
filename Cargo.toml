@@ -5,6 +5,7 @@ members = [
     "crates/ralph-core",
     "crates/ralph-adapters",
     "crates/ralph-tui",
+    "crates/ralph-mcp",
     "crates/ralph-cli",
     "crates/ralph-bench",
 ]
@@ -118,6 +119,7 @@ ralph-proto = { version = "2.0.9", path = "crates/ralph-proto" }
 ralph-core = { version = "2.0.9", path = "crates/ralph-core" }
 ralph-adapters = { version = "2.0.9", path = "crates/ralph-adapters" }
 ralph-tui = { version = "2.0.9", path = "crates/ralph-tui" }
+ralph-mcp = { version = "2.0.9", path = "crates/ralph-mcp" }
 ralph-cli = { version = "2.0.9", path = "crates/ralph-cli" }
 ralph-bench = { version = "2.0.9", path = "crates/ralph-bench" }
 
