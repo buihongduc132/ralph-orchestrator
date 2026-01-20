@@ -72,6 +72,8 @@ impl StreamHandler for PrettyStreamHandler {
     fn on_text(&mut self, text: &str) {
         // Buffer text for markdown rendering
         self.text_buffer.push_str(text);
+        // Flush immediately so text streams progressively (important for Text format backends like Kiro)
+        self.flush_text_buffer();
     }
 
     fn on_tool_result(&mut self, _id: &str, output: &str) {
