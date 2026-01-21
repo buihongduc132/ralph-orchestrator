@@ -1470,6 +1470,7 @@ dependencies = [
  "chrono",
  "crossterm 0.28.1",
  "ralph-proto",
+ "regex",
  "serde",
  "serde_json",
  "serde_yaml",
