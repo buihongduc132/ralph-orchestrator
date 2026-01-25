@@ -28,7 +28,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
+
+      - name: Checkout PR branch (fork workaround)
+        if: github.event_name == 'issue_comment' && github.event.issue.pull_request
+        run: |
+          gh pr checkout ${{ github.event.issue.number }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Claude Code
         id: claude
