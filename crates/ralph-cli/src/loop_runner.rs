@@ -148,9 +148,10 @@ pub async fn run_loop_impl(
 
     // Log initial event (use configured starting_event or default to task.start/task.resume)
     let default_start_topic = if resume { "task.resume" } else { "task.start" };
-    let start_topic = config.event_loop.starting_event
-        .as_ref()
-        .map(|s| s.as_str())
+    let start_topic = config
+        .event_loop
+        .starting_event
+        .as_deref()
         .unwrap_or(default_start_topic);
     let start_triggered = "planner"; // Default triggered hat for backward compat
     let start_event = Event::new(start_topic, &prompt_content);
@@ -611,59 +612,64 @@ pub async fn run_loop_impl(
 
         // Step 2: Resolve effective backend and determine backend name for timeout
         // Note: backend_name_for_timeout is owned String to avoid lifetime issues with hat_backend reference
-        let (effective_backend, backend_name_for_timeout): (CliBackend, String) = match hat_backend_opt {
-            Some(hat_backend) => {
-                // Hat has custom backend configuration
-                match CliBackend::from_hat_backend(hat_backend) {
-                    Ok(hat_backend_instance) => {
-                        debug!(
-                            "Using hat-level backend for '{}': {:?}",
-                            display_hat, hat_backend
-                        );
+        let (effective_backend, backend_name_for_timeout): (CliBackend, String) =
+            match hat_backend_opt {
+                Some(hat_backend) => {
+                    // Hat has custom backend configuration
+                    match CliBackend::from_hat_backend(hat_backend) {
+                        Ok(hat_backend_instance) => {
+                            debug!(
+                                "Using hat-level backend for '{}': {:?}",
+                                display_hat, hat_backend
+                            );
 
-                        // Determine backend name for timeout based on hat backend type
-                        // Use owned String to avoid borrowing issues and improve code clarity
-                        let backend_name = match hat_backend {
-                            ralph_core::HatBackend::Named(name) => name.clone(),
-                            ralph_core::HatBackend::KiroAgent { .. } => "kiro".to_string(),
-                            // For Custom backends, extract command name from path
-                            // Handles both Unix ("/usr/bin/codex") and commands with args ("ollama run llama3")
-                            ralph_core::HatBackend::Custom { command, .. } => {
-                                // First split by whitespace to handle commands with arguments
-                                // e.g., "ollama run llama3" -> "ollama"
-                                let base_command = command.split_whitespace().next().unwrap_or(command);
-                                // Then extract filename from path
-                                // e.g., "/usr/bin/codex" -> "codex"
-                                std::path::Path::new(base_command)
-                                    .file_name()
-                                    .and_then(|s| s.to_str())
-                                    .unwrap_or("custom")
-                                    .to_string()
-                            }
-                        };
+                            // Determine backend name for timeout based on hat backend type
+                            // Use owned String to avoid borrowing issues and improve code clarity
+                            let backend_name = match hat_backend {
+                                ralph_core::HatBackend::Named(name) => name.clone(),
+                                ralph_core::HatBackend::NamedWithArgs { backend_type, .. } => {
+                                    backend_type.clone()
+                                }
+                                ralph_core::HatBackend::KiroAgent { .. } => "kiro".to_string(),
+                                // For Custom backends, extract command name from path
+                                // Handles both Unix ("/usr/bin/codex") and commands with args ("ollama run llama3")
+                                ralph_core::HatBackend::Custom { command, .. } => {
+                                    // First split by whitespace to handle commands with arguments
+                                    // e.g., "ollama run llama3" -> "ollama"
+                                    let base_command =
+                                        command.split_whitespace().next().unwrap_or(command);
+                                    // Then extract filename from path
+                                    // e.g., "/usr/bin/codex" -> "codex"
+                                    std::path::Path::new(base_command)
+                                        .file_name()
+                                        .and_then(|s| s.to_str())
+                                        .unwrap_or("custom")
+                                        .to_string()
+                                }
+                            };
 
-                        (hat_backend_instance, backend_name)
-                    }
-                    Err(e) => {
-                        // Failed to create backend from hat config - fall back to global
-                        warn!(
-                            "Failed to create backend from hat configuration for '{}': {}. Falling back to global backend.",
-                            display_hat, e
-                        );
-                        // IMPORTANT: Use global backend name for timeout since we're using global backend
-                        (backend.clone(), config.cli.backend.to_string())
+                            (hat_backend_instance, backend_name)
+                        }
+                        Err(e) => {
+                            // Failed to create backend from hat config - fall back to global
+                            warn!(
+                                "Failed to create backend from hat configuration for '{}': {}. Falling back to global backend.",
+                                display_hat, e
+                            );
+                            // IMPORTANT: Use global backend name for timeout since we're using global backend
+                            (backend.clone(), config.cli.backend.clone())
+                        }
                     }
                 }
-            }
-            None => {
-                // No custom backend - use global configuration
-                debug!(
-                    "Using global backend for '{}': {}",
-                    display_hat, config.cli.backend
-                );
-                (backend.clone(), config.cli.backend.to_string())
-            }
-        };
+                None => {
+                    // No custom backend - use global configuration
+                    debug!(
+                        "Using global backend for '{}': {}",
+                        display_hat, config.cli.backend
+                    );
+                    (backend.clone(), config.cli.backend.clone())
+                }
+            };
 
         // Step 3: Get timeout from config based on actual backend being used
         let timeout_secs = config.adapter_settings(&backend_name_for_timeout).timeout;

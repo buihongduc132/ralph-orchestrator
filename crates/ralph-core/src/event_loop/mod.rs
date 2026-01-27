@@ -374,7 +374,10 @@ impl EventLoop {
     /// Initializes the loop by publishing the start event.
     pub fn initialize(&mut self, prompt_content: &str) {
         // Use configured starting_event or default to task.start for backward compatibility
-        let topic = self.config.event_loop.starting_event
+        let topic = self
+            .config
+            .event_loop
+            .starting_event
             .clone()
             .unwrap_or_else(|| "task.start".to_string());
         self.initialize_with_topic(&topic, prompt_content);
