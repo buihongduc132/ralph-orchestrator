@@ -32,7 +32,7 @@ pub struct LoopsArgs {
 #[derive(Subcommand, Debug)]
 pub enum LoopsCommands {
     /// List all loops (default if no subcommand)
-    List,
+    List(ListArgs),
 
     /// View loop output/logs
     Logs(LogsArgs),
@@ -60,6 +60,13 @@ pub enum LoopsCommands {
 
     /// Merge a completed loop (or force retry)
     Merge(MergeArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct ListArgs {
+    /// Output JSON instead of table
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -137,7 +144,8 @@ pub struct MergeArgs {
 /// Execute a loops command.
 pub fn execute(args: LoopsArgs, use_colors: bool) -> Result<()> {
     match args.command {
-        None | Some(LoopsCommands::List) => list_loops(use_colors),
+        None => list_loops(ListArgs { json: false }, use_colors),
+        Some(LoopsCommands::List(args)) => list_loops(args, use_colors),
         Some(LoopsCommands::Logs(logs_args)) => show_logs(logs_args),
         Some(LoopsCommands::History(history_args)) => show_history(history_args),
         Some(LoopsCommands::Retry(retry_args)) => retry_merge(retry_args),
@@ -169,7 +177,7 @@ fn is_process_alive(pid: u32) -> bool {
 }
 
 /// List all loops with their status.
-fn list_loops(use_colors: bool) -> Result<()> {
+fn list_loops(args: ListArgs, use_colors: bool) -> Result<()> {
     use ralph_core::LoopLock;
 
     let cwd = std::env::current_dir()?;
@@ -233,9 +241,15 @@ fn list_loops(use_colors: bool) -> Result<()> {
     }
 
     // Add merge queue entries not in registry
+    // Skip terminal states (Merged, Discarded) - these are completed and no longer relevant
     for entry in &merge_entries {
         let already_listed = rows.iter().any(|r| r.id.ends_with(&entry.loop_id));
         if !already_listed {
+            // Skip terminal merge states - they clutter the output and are no longer actionable
+            if entry.state.is_terminal() {
+                continue;
+            }
+
             let status = match entry.state {
                 MergeState::Queued => "queued",
                 MergeState::Merging => "merging",
@@ -270,7 +284,17 @@ fn list_loops(use_colors: bool) -> Result<()> {
     }
 
     if rows.is_empty() {
-        println!("No loops found.");
+        if args.json {
+            println!("[]");
+        } else {
+            println!("No loops found.");
+        }
+        return Ok(());
+    }
+
+    if args.json {
+        let json = serde_json::to_string_pretty(&rows)?;
+        println!("{json}");
         return Ok(());
     }
 
@@ -297,6 +321,7 @@ fn list_loops(use_colors: bool) -> Result<()> {
     Ok(())
 }
 
+#[derive(serde::Serialize)]
 struct LoopRow {
     id: String,
     status: String,

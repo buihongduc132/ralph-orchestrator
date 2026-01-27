@@ -105,6 +105,16 @@ pub enum MergeState {
     Discarded,
 }
 
+impl MergeState {
+    /// Returns true if this is a terminal state (no further transitions possible).
+    ///
+    /// Terminal states (`Merged`, `Discarded`) represent completed loops that
+    /// no longer need user attention and can be filtered from UI displays.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Merged | Self::Discarded)
+    }
+}
+
 /// Summary of a loop's merge status.
 #[derive(Debug, Clone)]
 pub struct MergeEntry {
