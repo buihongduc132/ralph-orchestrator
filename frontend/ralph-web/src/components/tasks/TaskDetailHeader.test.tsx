@@ -149,10 +149,11 @@ describe("TaskDetailHeader", () => {
     it("positions back button on the left and action button on the right", () => {
       render(<TaskDetailHeader {...defaultProps} status="open" />);
 
-      // Container should use flexbox with space-between
-      const container = screen.getByRole("button", { name: /back to tasks/i }).parentElement;
-      expect(container).toHaveClass("flex");
-      expect(container).toHaveClass("justify-between");
+      // The back button is inside an inner flex group; the outer container uses justify-between
+      const backButton = screen.getByRole("button", { name: /back to tasks/i });
+      const outerContainer = backButton.parentElement?.parentElement;
+      expect(outerContainer).toHaveClass("flex");
+      expect(outerContainer).toHaveClass("justify-between");
     });
 
     it("aligns items vertically in the center", () => {

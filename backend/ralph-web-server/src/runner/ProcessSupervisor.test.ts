@@ -11,7 +11,7 @@ test("ProcessSupervisor.spawn creates task directory and PID file", () => {
   const supervisor = new ProcessSupervisor({ runDir: testRunDir });
   const taskId = "test-spawn-" + Date.now();
 
-  const handle = supervisor.spawn(taskId, "test prompt", ["--version"], process.cwd());
+  const handle = supervisor.spawn(taskId, "test prompt", ["--version"], process.cwd(), "node");
 
   assert.ok(handle.pid > 0);
   assert.strictEqual(handle.taskId, taskId);
@@ -27,7 +27,7 @@ test("ProcessSupervisor.spawn writes initial status", () => {
   const supervisor = new ProcessSupervisor({ runDir: testRunDir });
   const taskId = "test-status-" + Date.now();
 
-  const handle = supervisor.spawn(taskId, "test prompt", ["--version"], process.cwd());
+  const handle = supervisor.spawn(taskId, "test prompt", ["--version"], process.cwd(), "node");
   const status = supervisor.getStatus(taskId);
 
   assert.ok(status);
@@ -49,7 +49,7 @@ test("ProcessSupervisor.reconnect returns handle for existing process", () => {
   const supervisor = new ProcessSupervisor({ runDir: testRunDir });
   const taskId = "test-reconnect-" + Date.now();
 
-  const original = supervisor.spawn(taskId, "test prompt", ["--version"], process.cwd());
+  const original = supervisor.spawn(taskId, "test prompt", ["--version"], process.cwd(), "node");
   const reconnected = supervisor.reconnect(taskId);
 
   assert.ok(reconnected);
@@ -85,7 +85,7 @@ test("ProcessSupervisor.getStatus returns status for existing task", () => {
   const supervisor = new ProcessSupervisor({ runDir: testRunDir });
   const taskId = "test-getstatus-" + Date.now();
 
-  const handle = supervisor.spawn(taskId, "test prompt", ["--version"], process.cwd());
+  const handle = supervisor.spawn(taskId, "test prompt", ["--version"], process.cwd(), "node");
   const status = supervisor.getStatus(taskId);
 
   assert.ok(status);
@@ -111,7 +111,7 @@ test("ProcessSupervisor.spawn treats shell metacharacters as literals (CVE regre
     "`id`",                 // Backtick command substitution
   ];
 
-  const handle = supervisor.spawn(taskId, "test prompt", maliciousArgs, process.cwd());
+  const handle = supervisor.spawn(taskId, "test prompt", maliciousArgs, process.cwd(), "node");
 
   // If we got here without spawning additional processes, the injection was prevented
   assert.ok(handle.pid > 0);

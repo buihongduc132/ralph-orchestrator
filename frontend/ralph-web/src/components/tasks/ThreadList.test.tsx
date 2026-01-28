@@ -1,8 +1,9 @@
 /**
  * ThreadList Component Tests - Merge Button State Propagation
  *
- * Tests that ThreadList correctly passes mergeButtonState from the
- * loops.list API response to LoopActions component for each worktree loop.
+ * Tests that ThreadList correctly maps loops to tasks via loopId and
+ * passes mergeButtonState through to TaskThread for each worktree loop.
+ * Merge buttons are rendered by TaskThread, not by a separate loops section.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -30,11 +31,33 @@ vi.mock("@/trpc", () => {
             data: [
               {
                 id: "task-001",
-                title: "Test task",
-                status: "open",
+                title: "Implement feature A",
+                status: "running",
                 priority: 2,
+                blockedBy: null,
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
+                loopId: "loop-worktree-001",
+              },
+              {
+                id: "task-002",
+                title: "Implement feature B",
+                status: "running",
+                priority: 2,
+                blockedBy: null,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                loopId: "loop-worktree-002",
+              },
+              {
+                id: "task-003",
+                title: "Building core module",
+                status: "running",
+                priority: 2,
+                blockedBy: null,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                loopId: "loop-primary",
               },
             ],
             isLoading: false,
@@ -151,80 +174,63 @@ describe("ThreadList merge button state propagation", () => {
     vi.clearAllMocks();
   });
 
-  describe("Active Loops section", () => {
+  describe("task cards with loop associations", () => {
     it("renders merge button as enabled when mergeButtonState is active", () => {
-      // Given: ThreadList with loops data containing a worktree loop with active merge state
+      // Given: ThreadList with tasks mapped to loops via loopId
       render(<ThreadList />, { wrapper: createTestWrapper() });
 
-      // Then: The merge button for the active-state loop should be enabled
-      // Navigate to the card container (rounded-lg border bg-card p-3)
-      const activeLoopsContainer = screen
-        .getByRole("heading", { name: /active loops/i })
-        .closest(".rounded-lg") as HTMLElement;
-
-      // Find the loop row for feature-a (which has active state)
-      const featureARow = within(activeLoopsContainer)
+      // Then: The task card for feature-a (loopId maps to active merge state) should show enabled merge
+      const taskList = screen.getByRole("list", { name: /task list/i });
+      const featureACard = within(taskList)
         .getByText(/implement feature a/i)
-        .closest(".bg-muted\\/50") as HTMLElement;
+        .closest("[role='button']") as HTMLElement;
 
-      const mergeButton = within(featureARow).getByRole("button", { name: /merge now/i });
+      const mergeButton = within(featureACard).getByRole("button", { name: /merge/i });
       expect(mergeButton).toBeEnabled();
       expect(mergeButton).not.toHaveClass("opacity-50");
     });
 
     it("renders merge button as blocked when mergeButtonState is blocked", () => {
-      // Given: ThreadList with loops data containing a worktree loop with blocked merge state
+      // Given: ThreadList with tasks mapped to loops via loopId
       render(<ThreadList />, { wrapper: createTestWrapper() });
 
-      // Then: The merge button for the blocked-state loop should be disabled
-      const activeLoopsContainer = screen
-        .getByRole("heading", { name: /active loops/i })
-        .closest(".rounded-lg") as HTMLElement;
-
-      // Find the loop row for feature-b (which has blocked state)
-      const featureBRow = within(activeLoopsContainer)
+      // Then: The task card for feature-b (loopId maps to blocked merge state) should show disabled merge
+      const taskList = screen.getByRole("list", { name: /task list/i });
+      const featureBCard = within(taskList)
         .getByText(/implement feature b/i)
-        .closest(".bg-muted\\/50") as HTMLElement;
+        .closest("[role='button']") as HTMLElement;
 
-      const mergeButton = within(featureBRow).getByRole("button", { name: /merge now/i });
+      const mergeButton = within(featureBCard).getByRole("button", { name: /merge/i });
       expect(mergeButton).toBeDisabled();
       expect(mergeButton).toHaveClass("opacity-50");
     });
 
     it("shows blocked reason in tooltip when mergeButtonState is blocked", () => {
-      // Given: ThreadList with loops data containing a worktree loop with blocked merge state and reason
+      // Given: ThreadList with tasks mapped to loops via loopId
       render(<ThreadList />, { wrapper: createTestWrapper() });
 
       // Then: The blocked merge button should show the reason in its tooltip
-      const activeLoopsContainer = screen
-        .getByRole("heading", { name: /active loops/i })
-        .closest(".rounded-lg") as HTMLElement;
-
-      // Find the loop row for feature-b (which has blocked state with reason)
-      const featureBRow = within(activeLoopsContainer)
+      const taskList = screen.getByRole("list", { name: /task list/i });
+      const featureBCard = within(taskList)
         .getByText(/implement feature b/i)
-        .closest(".bg-muted\\/50") as HTMLElement;
+        .closest("[role='button']") as HTMLElement;
 
-      const mergeButton = within(featureBRow).getByRole("button", { name: /merge now/i });
+      const mergeButton = within(featureBCard).getByRole("button", { name: /merge/i });
       expect(mergeButton).toHaveAttribute("title", expect.stringContaining("Primary loop is running"));
     });
 
     it("does not render merge button for primary loop (in-place)", () => {
-      // Given: ThreadList with loops data containing a primary loop (in-place)
+      // Given: ThreadList with tasks mapped to loops via loopId
       render(<ThreadList />, { wrapper: createTestWrapper() });
 
-      // Then: The primary loop should not have a merge button
-      const activeLoopsContainer = screen
-        .getByRole("heading", { name: /active loops/i })
-        .closest(".rounded-lg") as HTMLElement;
-
-      // Find the loop row for primary loop
-      const primaryLoopRow = within(activeLoopsContainer)
+      // Then: The task card for the primary loop (in-place) should not have a merge button
+      const taskList = screen.getByRole("list", { name: /task list/i });
+      const primaryCard = within(taskList)
         .getByText(/building core module/i)
-        .closest(".bg-muted\\/50") as HTMLElement;
+        .closest("[role='button']") as HTMLElement;
 
-      // Primary loops are in-place and should have Stop button but not Merge
-      expect(within(primaryLoopRow).queryByRole("button", { name: /merge now/i })).not.toBeInTheDocument();
+      // Primary loops are in-place and should not show Merge button
+      expect(within(primaryCard).queryByRole("button", { name: /merge/i })).not.toBeInTheDocument();
     });
   });
 });

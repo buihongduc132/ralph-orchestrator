@@ -66,6 +66,7 @@ function createTestWrapper() {
 describe("TaskInput preset dropdown", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionStorage.clear();
   });
 
   describe("rendering", () => {
@@ -83,12 +84,13 @@ describe("TaskInput preset dropdown", () => {
       render(<TaskInput />, { wrapper: createTestWrapper() });
 
       // Then: All presets from the API should be available as options
+      // The component renders a hardcoded "Default (from config)" option plus the API presets
       const presetDropdown = screen.getByRole("combobox", { name: /preset/i });
       const options = presetDropdown.querySelectorAll("option");
 
-      // Should have 3 presets from the mock data
-      expect(options).toHaveLength(3);
-      expect(screen.getByRole("option", { name: /default/i })).toBeInTheDocument();
+      // Should have 1 hardcoded default + 3 presets from the mock data = 4 total
+      expect(options).toHaveLength(4);
+      expect(screen.getByRole("option", { name: /default \(from config\)/i })).toBeInTheDocument();
       expect(screen.getByRole("option", { name: /planning/i })).toBeInTheDocument();
       expect(screen.getByRole("option", { name: /my custom collection/i })).toBeInTheDocument();
     });
@@ -97,12 +99,12 @@ describe("TaskInput preset dropdown", () => {
       // Given: TaskInput component is rendered with presets from different sources
       render(<TaskInput />, { wrapper: createTestWrapper() });
 
-      // Then: Options should indicate their source
-      const defaultOption = screen.getByRole("option", { name: /default/i });
+      // Then: API-sourced options should indicate their source in parentheses
+      // Format: "Name (source)" e.g. "Default (builtin)", "My Custom Collection (collection)"
+      const builtinOption = screen.getByRole("option", { name: /^Default \(builtin\)$/i });
       const collectionOption = screen.getByRole("option", { name: /my custom collection/i });
 
-      // Builtin presets should be distinguishable from collection presets
-      expect(defaultOption).toHaveTextContent(/builtin/i);
+      expect(builtinOption).toHaveTextContent(/builtin/i);
       expect(collectionOption).toHaveTextContent(/collection/i);
     });
   });

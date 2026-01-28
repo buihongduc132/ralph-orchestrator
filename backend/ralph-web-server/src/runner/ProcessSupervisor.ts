@@ -46,7 +46,7 @@ export class ProcessSupervisor {
   /**
    * Spawn a detached ralph process
    */
-  spawn(taskId: string, prompt: string, args: string[], cwd: string): ProcessHandle {
+  spawn(taskId: string, prompt: string, args: string[], cwd: string, command: string = "ralph"): ProcessHandle {
     const taskDir = path.join(this.runDir, taskId);
 
     // Create task directory
@@ -73,7 +73,7 @@ export class ProcessSupervisor {
 
     // Spawn detached process using array form (no shell injection)
     // SECURITY: Using array form prevents command injection via shell metacharacters
-    const child = spawn("ralph", args, {
+    const child = spawn(command, args, {
       cwd,
       detached: true,
       stdio: ["ignore", stdoutFd, stderrFd],

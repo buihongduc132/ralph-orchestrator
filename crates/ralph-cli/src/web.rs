@@ -7,8 +7,10 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 use tokio::process::{Child, Command as AsyncCommand};
 
@@ -36,6 +38,121 @@ pub struct WebArgs {
     pub workspace: Option<PathBuf>,
 }
 
+/// Check that Node.js is installed and >= 18. Returns the version string.
+fn check_node() -> Result<String> {
+    let output = Command::new("node")
+        .arg("--version")
+        .output()
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Node.js is not installed or not in PATH.\n\
+                 Install Node.js 18+: https://nodejs.org/\n\
+                 Or via nvm: nvm install 18"
+            )
+        })?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "Failed to run `node --version`.\n\
+             Install Node.js 18+: https://nodejs.org/"
+        );
+    }
+
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    // Parse major version from e.g. "v18.17.0"
+    let major: u32 = version
+        .trim_start_matches('v')
+        .split('.')
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    if major < 18 {
+        anyhow::bail!(
+            "Node.js {} is too old (need >= 18).\n\
+             Update: https://nodejs.org/ or `nvm install 18`",
+            version
+        );
+    }
+
+    Ok(version)
+}
+
+/// Check that npm is installed and working. Returns the version string.
+fn check_npm() -> Result<String> {
+    let output = Command::new("npm").arg("--version").output().map_err(|_| {
+        anyhow::anyhow!(
+            "npm is not installed or not in PATH.\n\
+             npm should come with Node.js. Try reinstalling Node: https://nodejs.org/"
+        )
+    })?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "Failed to run `npm --version`.\n\
+             Try reinstalling Node.js: https://nodejs.org/"
+        );
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Check if npm dependencies need to be installed.
+fn needs_install(root: &Path) -> bool {
+    !root.join("node_modules/.package-lock.json").exists()
+}
+
+/// Run npm install (or npm ci if lockfile present) with a spinner.
+async fn run_npm_install(root: &Path) -> Result<()> {
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.cyan} {msg}")
+            .expect("valid template"),
+    );
+
+    let has_lockfile = root.join("package-lock.json").exists();
+    let install_cmd = if has_lockfile { "ci" } else { "install" };
+
+    spinner.set_message(format!("Running npm {}...", install_cmd));
+    spinner.enable_steady_tick(Duration::from_millis(100));
+
+    let output = AsyncCommand::new("npm")
+        .arg(install_cmd)
+        .current_dir(root)
+        .output()
+        .await
+        .context("Failed to run npm install")?;
+
+    spinner.finish_and_clear();
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("npm {} failed:\n{}", install_cmd, stderr.trim());
+    }
+
+    println!("Dependencies installed successfully.");
+    Ok(())
+}
+
+/// Run pre-flight checks: verify Node.js/npm and auto-install dependencies.
+async fn preflight(root: &Path) -> Result<()> {
+    let node_version = check_node()?;
+    let npm_version = check_npm()?;
+    println!(
+        "Using Node {} with npm {}",
+        node_version.trim_start_matches('v'),
+        npm_version
+    );
+
+    if needs_install(root) {
+        println!("node_modules not found — installing dependencies...");
+        run_npm_install(root).await?;
+    }
+
+    Ok(())
+}
+
 /// Run both backend and frontend dev servers in parallel
 pub async fn execute(args: WebArgs) -> Result<()> {
     println!("🌐 Starting Ralph web servers...");
@@ -54,6 +171,9 @@ pub async fn execute(args: WebArgs) -> Result<()> {
         }
         None => env::current_dir().context("Failed to get current directory")?,
     };
+
+    // Verify Node.js/npm and auto-install dependencies if needed
+    preflight(&workspace_root).await?;
 
     println!("Using workspace: {}", workspace_root.display());
 

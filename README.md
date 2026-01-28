@@ -56,6 +56,35 @@ For simpler tasks, skip planning and run directly:
 ralph run -p "Add input validation to the /users endpoint"
 ```
 
+## Web Dashboard
+
+Ralph includes a web dashboard for monitoring and managing orchestration loops.
+
+```bash
+ralph web
+```
+
+**Requirements:** Node.js >= 18 and npm. On first run, `ralph web` will auto-detect missing `node_modules` and run `npm install` for you.
+
+To set up Node.js:
+
+```bash
+# Option 1: nvm (recommended)
+nvm install    # reads .nvmrc
+
+# Option 2: direct install
+# https://nodejs.org/
+```
+
+For development:
+
+```bash
+npm install          # install dependencies
+npm run dev          # run both servers (backend:3000, frontend:5173)
+npm run test:server  # backend tests
+npm run test         # all tests
+```
+
 ## What is Ralph?
 
 Ralph implements the [Ralph Wiggum technique](https://ghuntley.com/ralph/) — autonomous task completion through continuous iteration. It supports:

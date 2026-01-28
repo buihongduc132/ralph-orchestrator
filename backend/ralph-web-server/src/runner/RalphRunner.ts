@@ -244,7 +244,8 @@ export class RalphRunner extends EventEmitter {
           this.taskId,
           promptText,
           args,
-          this.cwd ?? process.cwd()
+          this.cwd ?? process.cwd(),
+          this.command
         );
 
         // Start streaming output from log files
