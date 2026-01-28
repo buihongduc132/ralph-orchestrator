@@ -37,7 +37,6 @@ import {
   GitCommit,
   AlertCircle,
   FileQuestion,
-  Trash2,
 } from "lucide-react";
 import type { TaskAction } from "@/components/tasks/TaskDetailHeader";
 
@@ -275,6 +274,9 @@ export function TaskDetailPage() {
         onBack={() => navigate("/tasks")}
         onAction={handleAction}
         isActionPending={isActionPending}
+        showDelete={showDeleteButton}
+        onDelete={handleDelete}
+        isDeletePending={deleteMutation.isPending}
       />
 
       {/* Page title - full prompt display */}
@@ -354,29 +356,6 @@ export function TaskDetailPage() {
               </Button>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* Delete button for terminal states */}
-      {showDeleteButton && (
-        <div className="flex gap-2">
-          <Button
-            variant="destructive"
-            onClick={handleDelete}
-            disabled={deleteMutation.isPending}
-          >
-            {deleteMutation.isPending ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Deleting...
-              </>
-            ) : (
-              <>
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete
-              </>
-            )}
-          </Button>
         </div>
       )}
 

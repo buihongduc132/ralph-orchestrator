@@ -3,7 +3,7 @@
  *
  * Tests for the TaskDetailHeader component that displays:
  * - Left side: Back navigation button ("← Back to Tasks")
- * - Right side: Status-based action button (Cancel/Retry/Run)
+ * - Right side: Delete button (for failed/closed) + Status-based action button (Cancel/Retry/Run)
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -198,6 +198,150 @@ describe("TaskDetailHeader", () => {
       // Loader2 icon from lucide-react with animate-spin
       expect(document.querySelector(".lucide-loader-2")).toBeInTheDocument();
       expect(document.querySelector(".animate-spin")).toBeInTheDocument();
+    });
+  });
+
+  describe("delete button", () => {
+    it("renders delete button when showDelete is true", () => {
+      render(
+        <TaskDetailHeader
+          {...defaultProps}
+          status="failed"
+          showDelete={true}
+          onDelete={vi.fn()}
+        />
+      );
+
+      const deleteButton = screen.getByRole("button", { name: /delete/i });
+      expect(deleteButton).toBeInTheDocument();
+      expect(deleteButton).toHaveClass("bg-destructive");
+    });
+
+    it("does not render delete button when showDelete is false", () => {
+      render(
+        <TaskDetailHeader
+          {...defaultProps}
+          status="failed"
+          showDelete={false}
+        />
+      );
+
+      expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
+    });
+
+    it("does not render delete button when showDelete is not provided", () => {
+      render(<TaskDetailHeader {...defaultProps} status="failed" />);
+
+      expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
+    });
+
+    it("calls onDelete when delete button is clicked", () => {
+      const onDelete = vi.fn();
+      render(
+        <TaskDetailHeader
+          {...defaultProps}
+          status="failed"
+          showDelete={true}
+          onDelete={onDelete}
+        />
+      );
+
+      const deleteButton = screen.getByRole("button", { name: /delete/i });
+      fireEvent.click(deleteButton);
+
+      expect(onDelete).toHaveBeenCalledTimes(1);
+    });
+
+    it("disables delete button when onDelete is not provided", () => {
+      render(
+        <TaskDetailHeader
+          {...defaultProps}
+          status="failed"
+          showDelete={true}
+        />
+      );
+
+      const deleteButton = screen.getByRole("button", { name: /delete/i });
+      expect(deleteButton).toBeDisabled();
+    });
+
+    it("disables delete button when isDeletePending is true", () => {
+      render(
+        <TaskDetailHeader
+          {...defaultProps}
+          status="failed"
+          showDelete={true}
+          onDelete={vi.fn()}
+          isDeletePending={true}
+        />
+      );
+
+      const deleteButton = screen.getByRole("button", { name: /delete/i });
+      expect(deleteButton).toBeDisabled();
+    });
+
+    it("shows loading indicator on delete button when isDeletePending is true", () => {
+      render(
+        <TaskDetailHeader
+          {...defaultProps}
+          status="failed"
+          showDelete={true}
+          onDelete={vi.fn()}
+          isDeletePending={true}
+        />
+      );
+
+      // Should have loader icon inside delete button
+      expect(document.querySelector(".lucide-loader-2")).toBeInTheDocument();
+    });
+
+    it("shows trash icon when not deleting", () => {
+      render(
+        <TaskDetailHeader
+          {...defaultProps}
+          status="failed"
+          showDelete={true}
+          onDelete={vi.fn()}
+          isDeletePending={false}
+        />
+      );
+
+      expect(document.querySelector(".lucide-trash-2")).toBeInTheDocument();
+    });
+
+    it("positions delete button next to action button on the right", () => {
+      render(
+        <TaskDetailHeader
+          {...defaultProps}
+          status="failed"
+          showDelete={true}
+          onDelete={vi.fn()}
+        />
+      );
+
+      // Both delete and retry buttons should exist
+      const deleteButton = screen.getByRole("button", { name: /delete/i });
+      const retryButton = screen.getByRole("button", { name: /retry/i });
+
+      expect(deleteButton).toBeInTheDocument();
+      expect(retryButton).toBeInTheDocument();
+
+      // They should be siblings in a flex container
+      expect(deleteButton.parentElement).toBe(retryButton.parentElement);
+      expect(deleteButton.parentElement).toHaveClass("flex", "gap-2");
+    });
+
+    it("shows delete button for closed status", () => {
+      render(
+        <TaskDetailHeader
+          {...defaultProps}
+          status="closed"
+          showDelete={true}
+          onDelete={vi.fn()}
+        />
+      );
+
+      expect(screen.getByRole("button", { name: /delete/i })).toBeInTheDocument();
     });
   });
 });

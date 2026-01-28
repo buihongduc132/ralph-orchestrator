@@ -3,11 +3,11 @@
  *
  * Header for task detail view with navigation and status-based actions.
  * - Left side: Back navigation button ("← Back to Tasks")
- * - Right side: Status-based action button (Cancel/Retry/Run)
+ * - Right side: Delete button (for failed/closed) + Status-based action button (Cancel/Retry/Run)
  */
 
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2, Trash2 } from "lucide-react";
 
 export type TaskStatus = "open" | "running" | "completed" | "closed" | "failed";
 export type TaskAction = "run" | "cancel" | "retry";
@@ -21,6 +21,12 @@ export interface TaskDetailHeaderProps {
   onAction?: (action: TaskAction) => void;
   /** Whether an action is pending (shows loading state) */
   isActionPending?: boolean;
+  /** Whether to show delete button (for terminal states) */
+  showDelete?: boolean;
+  /** Callback when delete button is clicked */
+  onDelete?: () => void;
+  /** Whether delete action is pending */
+  isDeletePending?: boolean;
 }
 
 /**
@@ -47,6 +53,9 @@ export function TaskDetailHeader({
   onBack,
   onAction,
   isActionPending = false,
+  showDelete = false,
+  onDelete,
+  isDeletePending = false,
 }: TaskDetailHeaderProps) {
   const actionConfig = getActionForStatus(status);
 
@@ -61,16 +70,33 @@ export function TaskDetailHeader({
         Back to Tasks
       </Button>
 
-      {actionConfig && (
-        <Button
-          variant={actionConfig.variant}
-          onClick={() => onAction?.(actionConfig.action)}
-          disabled={!onAction || isActionPending}
-        >
-          {isActionPending && <Loader2 className="lucide-loader-2 animate-spin" />}
-          {actionConfig.label}
-        </Button>
-      )}
+      <div className="flex gap-2">
+        {showDelete && (
+          <Button
+            variant="destructive"
+            onClick={onDelete}
+            disabled={!onDelete || isDeletePending}
+          >
+            {isDeletePending ? (
+              <Loader2 className="lucide-loader-2 animate-spin mr-2" />
+            ) : (
+              <Trash2 className="lucide-trash-2 mr-2" />
+            )}
+            Delete
+          </Button>
+        )}
+
+        {actionConfig && (
+          <Button
+            variant={actionConfig.variant}
+            onClick={() => onAction?.(actionConfig.action)}
+            disabled={!onAction || isActionPending}
+          >
+            {isActionPending && <Loader2 className="lucide-loader-2 animate-spin" />}
+            {actionConfig.label}
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
