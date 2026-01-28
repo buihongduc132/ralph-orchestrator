@@ -17,16 +17,30 @@ cargo run -p ralph-e2e -- --mock             # E2E tests (CI-safe)
 
 **IMPORTANT**: Run `cargo test` before declaring any task done. Smoke test after code changes.
 
+### Web Dashboard
+
+```bash
+ralph web                                    # Launch both servers (backend:3000, frontend:5173)
+npm install                                  # Install all dependencies
+npm run dev                                  # Dev mode (both)
+npm run dev:server                           # Backend only
+npm run dev:web                              # Frontend only
+npm run test:server                          # Backend tests
+```
+
 ## Architecture
 
 ```
-ralph-cli      → CLI entry point, commands (run, plan, task, loops)
+ralph-cli      → CLI entry point, commands (run, plan, task, loops, web)
 ralph-core     → Orchestration logic, event loop, hats, memories, tasks
 ralph-adapters → Backend integrations (Claude, Kiro, Gemini, Codex, etc.)
 ralph-tui      → Terminal UI (ratatui-based)
 ralph-e2e      → End-to-end test framework
 ralph-proto    → Protocol definitions
 ralph-bench    → Benchmarking
+
+backend/       → Web server (@ralph-web/server) - Fastify + tRPC + SQLite
+frontend/      → Web dashboard (@ralph-web/dashboard) - React + Vite + TailwindCSS
 ```
 
 ### Key Files
@@ -49,6 +63,8 @@ ralph-bench    → Benchmarking
 - **Loop registry**: `crates/ralph-core/src/loop_registry.rs`
 - **Merge queue**: `crates/ralph-core/src/merge_queue.rs`
 - **CLI commands**: `crates/ralph-cli/src/loops.rs`, `task_cli.rs`
+- **Web server**: `backend/ralph-web-server/src/` (tRPC routes in `api/`, runners in `runner/`)
+- **Web dashboard**: `frontend/ralph-web/src/` (React components in `components/`)
 
 ## The Ralph Tenets
 
