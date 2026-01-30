@@ -117,8 +117,9 @@ pub struct DiscardArgs {
 
 #[derive(Parser, Debug)]
 pub struct StopArgs {
-    /// Loop ID
-    pub loop_id: String,
+    /// Loop ID (group-id). If omitted, stops the active primary loop.
+    #[arg(value_name = "LOOP_ID")]
+    pub loop_id: Option<String>,
 
     /// Use SIGKILL instead of SIGTERM
     #[arg(long)]
@@ -682,84 +683,63 @@ fn stop_loop(args: StopArgs) -> Result<()> {
     use ralph_core::LoopLock;
 
     let cwd = std::env::current_dir()?;
-    let (loop_id, worktree_path) = resolve_loop(&cwd, &args.loop_id)?;
-
-    let registry = LoopRegistry::new(&cwd);
-
-    // Try registry first for PID
-    let pid = if let Ok(Some(entry)) = registry.get(&loop_id) {
-        if !entry.is_alive() {
-            bail!(
-                "Loop '{}' is not running (process {} not found)",
-                loop_id,
-                entry.pid
-            );
-        }
-        Some(entry.pid)
-    } else if let Some(wt_path) = &worktree_path {
-        // Fall back to reading PID from worktree's lock file
-        read_pid_from_worktree(wt_path)?
-    } else {
-        // Try reading from primary loop's lock file
-        if let Ok(Some(metadata)) = LoopLock::read_existing(&cwd) {
-            Some(metadata.pid)
-        } else {
-            None
-        }
+    let (loop_id, worktree_path) = match args.loop_id.as_deref() {
+        Some(id) => resolve_loop(&cwd, id)?,
+        None => ("(primary)".to_string(), None),
     };
 
-    let pid = pid.context(format!(
-        "Cannot determine PID for loop '{}' - it may have already stopped",
-        loop_id
-    ))?;
+    let target_root = worktree_path
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| cwd.clone());
 
-    // Verify process is alive before sending signal
-    #[cfg(unix)]
-    {
-        use nix::sys::signal::{Signal, kill};
-        use nix::unistd::Pid;
+    let metadata = LoopLock::read_existing(&target_root)?
+        .context("Cannot determine active loop - it may have already stopped")?;
 
-        // Check if process exists (signal 0)
-        if kill(Pid::from_raw(pid as i32), None).is_err() {
-            bail!(
-                "Loop '{}' is not running (process {} not found)",
-                loop_id,
-                pid
+    if !is_process_alive(metadata.pid) {
+        bail!(
+            "Loop '{}' is not running (process {} not found)",
+            loop_id,
+            metadata.pid
+        );
+    }
+
+    if args.force {
+        // Force-stop with SIGKILL for immediate termination.
+        #[cfg(unix)]
+        {
+            use nix::sys::signal::{Signal, kill};
+            use nix::unistd::Pid;
+
+            println!(
+                "Sending SIGKILL to loop '{}' (PID {})...",
+                loop_id, metadata.pid
             );
+            kill(Pid::from_raw(metadata.pid as i32), Signal::SIGKILL)
+                .context("Failed to send SIGKILL")?;
+            println!("Signal sent.");
+            return Ok(());
         }
 
-        let signal = if args.force { "SIGKILL" } else { "SIGTERM" };
-        println!("Sending {} to loop '{}' (PID {})...", signal, loop_id, pid);
-
-        let sig = if args.force {
-            Signal::SIGKILL
-        } else {
-            Signal::SIGTERM
-        };
-
-        kill(Pid::from_raw(pid as i32), sig).context("Failed to send signal")?;
+        #[cfg(not(unix))]
+        {
+            bail!("--force is only supported on Unix systems");
+        }
     }
 
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        bail!("Stopping loops is only supported on Unix systems");
+    let stop_path = target_root.join(".ralph/stop-requested");
+    if let Some(parent) = stop_path.parent() {
+        std::fs::create_dir_all(parent)
+            .context("Failed to create .ralph directory for stop signal")?;
     }
+    std::fs::write(&stop_path, "").context("Failed to write stop signal")?;
 
-    println!("Signal sent.");
+    println!(
+        "Stop requested for loop '{}' (PID {}). The loop will stop at the next iteration boundary.",
+        loop_id, metadata.pid
+    );
+
     Ok(())
-}
-
-/// Read PID from a worktree's loop lock file.
-fn read_pid_from_worktree(worktree_path: &str) -> Result<Option<u32>> {
-    use ralph_core::LoopLock;
-
-    let wt_path = PathBuf::from(worktree_path);
-    if let Ok(Some(metadata)) = LoopLock::read_existing(&wt_path) {
-        Ok(Some(metadata.pid))
-    } else {
-        Ok(None)
-    }
 }
 
 /// Prune stale loops.

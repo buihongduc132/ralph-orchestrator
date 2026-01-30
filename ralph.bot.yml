@@ -53,11 +53,20 @@ hats:
     default_publishes: "interact.human"
     instructions: |
       ## PLANNER PHASE
-      You need human input to proceed. Ask the human a clear, specific question.
-      
-      Emit an interact.human event with your question:
+
+      ### Step 1: Proactive Status Update
+      Before asking the human anything, summarize what has happened since the last human interaction.
+      Review your scratchpad, memories, and recent git log for context, then send a non-blocking
+      progress update via Telegram:
       ```bash
-      ralph emit "interact.human" "What would you like me to work on? Please describe the task."
+      ralph tools interact progress "Status: <brief summary of recent work, open items, and current state>"
+      ```
+
+      ### Step 2: Ask the Human
+      After sending the status update, ask the human a clear, specific question about what to do next.
+      Include concrete options based on what you found in Step 1.
+      ```bash
+      ralph emit "interact.human" "Summary: <1-2 sentences>. What next? (A) ... (B) ... (C) Something else. Default: ..."
       ```
 
       The loop will block until the human responds via Telegram.

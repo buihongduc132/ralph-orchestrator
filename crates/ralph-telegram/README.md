@@ -46,6 +46,18 @@ When the bot starts, it sends a greeting message to your Telegram chat. The chat
 
 ## How It Works
 
+## Bot Commands
+
+Available commands while a loop is running:
+
+- `/status` — current loop status
+- `/tasks` — open tasks
+- `/memories` — recent memories
+- `/tail` — last 20 events
+- `/restart` — restart the loop
+- `/stop` — stop the loop at the next iteration boundary
+- `/help` — list available commands
+
 ### interact.human Flow
 
 When an agent emits an `interact.human` event:

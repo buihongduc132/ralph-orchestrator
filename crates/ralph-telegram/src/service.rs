@@ -364,6 +364,7 @@ impl TelegramService {
             BotCommand::new("tasks", "Open tasks"),
             BotCommand::new("memories", "Recent memories"),
             BotCommand::new("tail", "Last 20 events"),
+            BotCommand::new("stop", "Stop the loop"),
             BotCommand::new("help", "List available commands"),
         ];
 

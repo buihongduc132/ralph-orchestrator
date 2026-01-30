@@ -1836,6 +1836,30 @@ fn test_validation_failure_termination_at_threshold() {
 }
 
 #[test]
+fn test_stop_requested_termination_clears_signal() {
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir().unwrap();
+    let mut config = RalphConfig::default();
+    config.core.workspace_root = temp_dir.path().to_path_buf();
+    let event_loop = EventLoop::new(config);
+
+    let stop_path = temp_dir.path().join(".ralph/stop-requested");
+    std::fs::create_dir_all(stop_path.parent().unwrap()).unwrap();
+    std::fs::write(&stop_path, "").unwrap();
+
+    assert_eq!(
+        event_loop.check_termination(),
+        Some(TerminationReason::Stopped),
+        "Should terminate when stop requested signal exists"
+    );
+    assert!(
+        !stop_path.exists(),
+        "Stop signal should be removed after detection"
+    );
+}
+
+#[test]
 fn test_format_event_wraps_top_level_prompts() {
     // Kills: line 761 `==` → `!=` and `||` → `&&`
     let config = RalphConfig::default();

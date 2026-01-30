@@ -114,3 +114,6 @@ PROMPT.md
 !.ralph/agent/
 !.ralph/agent/memories.md
 !.ralph/agent/tasks.jsonl
+
+# Codex local state
+.codex/

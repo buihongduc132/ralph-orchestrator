@@ -525,6 +525,14 @@ impl EventLoop {
             return Some(TerminationReason::ValidationFailure);
         }
 
+        // Check for stop signal from Telegram /stop or CLI stop-requested
+        let stop_path =
+            std::path::Path::new(&self.config.core.workspace_root).join(".ralph/stop-requested");
+        if stop_path.exists() {
+            let _ = std::fs::remove_file(&stop_path);
+            return Some(TerminationReason::Stopped);
+        }
+
         // Check for restart signal from Telegram /restart command
         let restart_path =
             std::path::Path::new(&self.config.core.workspace_root).join(".ralph/restart-requested");

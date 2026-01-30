@@ -4,11 +4,12 @@
 //! - `ralph bot onboard --telegram` — Interactive wizard for Telegram bot setup
 //! - `ralph bot status` — Check current bot configuration status
 //! - `ralph bot test` — Send a test message to verify the bot works
+//! - `ralph bot token set <token>` — Store/overwrite the bot token
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::warn;
 
 use crate::ConfigSource;
@@ -31,6 +32,8 @@ pub enum BotCommands {
     Status,
     /// Send a test message to verify the bot works
     Test(TestArgs),
+    /// Manage bot tokens
+    Token(TokenArgs),
     /// Run as a persistent daemon, listening on Telegram and starting loops on demand
     Daemon(DaemonArgs),
 }
@@ -62,6 +65,29 @@ pub struct TestArgs {
 }
 
 #[derive(Parser, Debug)]
+pub struct TokenArgs {
+    #[command(subcommand)]
+    pub command: TokenCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TokenCommands {
+    /// Store or overwrite the bot token
+    Set(SetTokenArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct SetTokenArgs {
+    /// Telegram bot token to store
+    #[arg(value_name = "TOKEN")]
+    pub token: String,
+
+    /// Optional config file to update with the token
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
 pub struct DaemonArgs {}
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -77,10 +103,62 @@ pub async fn execute(
         BotCommands::Onboard(onboard_args) => onboard_telegram(onboard_args, use_colors).await,
         BotCommands::Status => bot_status(use_colors).await,
         BotCommands::Test(test_args) => bot_test(test_args, use_colors).await,
+        BotCommands::Token(token_args) => bot_token(token_args, use_colors),
         BotCommands::Daemon(daemon_args) => {
             run_daemon(daemon_args, config_sources, use_colors).await
         }
     }
+}
+
+fn bot_token(args: TokenArgs, use_colors: bool) -> Result<()> {
+    match args.command {
+        TokenCommands::Set(set_args) => bot_token_set(set_args, use_colors),
+    }
+}
+
+fn bot_token_set(args: SetTokenArgs, use_colors: bool) -> Result<()> {
+    let token = args.token;
+    let mut keychain_ok = false;
+
+    match store_bot_token(&token) {
+        Ok(()) => {
+            keychain_ok = true;
+            print_success(
+                use_colors,
+                "Token stored in OS keychain (ralph/telegram-bot-token)",
+            );
+        }
+        Err(e) => {
+            print_warning(
+                use_colors,
+                &format!("Could not store token in keychain: {e}"),
+            );
+        }
+    }
+
+    let has_config = args.config.is_some();
+    let config_path = args
+        .config
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("ralph.yml"));
+
+    let should_write_config = has_config || !keychain_ok;
+    if should_write_config {
+        save_bot_token_config(&config_path, &token)?;
+        print_success(
+            use_colors,
+            &format!("Token stored in {}", config_path.display()),
+        );
+    }
+
+    if !keychain_ok && !has_config {
+        print_warning(
+            use_colors,
+            "Keychain storage failed; token saved to ralph.yml instead.",
+        );
+    }
+
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -178,7 +256,8 @@ async fn onboard_telegram(args: OnboardArgs, use_colors: bool) -> Result<()> {
     println!();
     println!("Step 4: Save configuration");
 
-    // Store token in keychain
+    // Store token in keychain (fallback to config if unavailable)
+    let mut config_token: Option<&str> = None;
     match store_bot_token(&token) {
         Ok(()) => {
             print_success(
@@ -192,12 +271,19 @@ async fn onboard_telegram(args: OnboardArgs, use_colors: bool) -> Result<()> {
                 &format!("Could not store token in keychain: {e}"),
             );
             println!("    Set RALPH_TELEGRAM_BOT_TOKEN env var instead.");
+            config_token = Some(token.as_str());
         }
     }
 
     // Update ralph.yml
-    match save_robot_config(args.timeout) {
+    match save_robot_config(args.timeout, config_token) {
         Ok(()) => {
+            if config_token.is_some() {
+                print_warning(
+                    use_colors,
+                    "Stored bot token in ralph.yml (legacy). Consider using env var or keychain.",
+                );
+            }
             print_success(use_colors, "Updated ralph.yml (RObot.enabled: true)");
         }
         Err(e) => {
@@ -443,9 +529,11 @@ async fn run_daemon(
     }
 
     // Resolve bot token and chat_id for Telegram adapter
-    let token = resolve_token().context(
-        "No bot token available. Run `ralph bot onboard --telegram` or set RALPH_TELEGRAM_BOT_TOKEN",
-    )?;
+    let token = resolve_token()
+        .or_else(|| config_path.as_ref().and_then(|path| load_config_bot_token_from(path)))
+        .context(
+            "No bot token available. Run `ralph bot onboard --telegram` or set RALPH_TELEGRAM_BOT_TOKEN",
+        )?;
     let chat_id = resolve_chat_id()
         .context("No chat_id found. Run `ralph bot onboard --telegram` to detect it")?;
 
@@ -650,9 +738,19 @@ pub(crate) async fn telegram_send_message(token: &str, chat_id: i64, text: &str)
 fn store_bot_token(token: &str) -> Result<()> {
     let entry = keyring::Entry::new("ralph", "telegram-bot-token")
         .context("Failed to create keychain entry")?;
-    entry
-        .set_password(token)
-        .context("Failed to store token in keychain")?;
+    if let Err(err) = entry.set_password(token) {
+        // Some keychains refuse overwrites; try delete + set as a fallback.
+        if entry.delete_credential().is_ok() {
+            entry
+                .set_password(token)
+                .context("Failed to store token in keychain after deleting existing entry")?;
+        } else {
+            return Err(anyhow::anyhow!(
+                "Failed to store token in keychain: {}",
+                err
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -667,12 +765,36 @@ fn load_bot_token() -> Option<String> {
 // CONFIG HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Save RObot config to ralph.yml (without token).
+/// Save RObot config to ralph.yml.
 ///
 /// If ralph.yml exists, parses it and updates the RObot section.
 /// If it doesn't exist, creates a minimal config.
-fn save_robot_config(timeout: u64) -> Result<()> {
+fn save_robot_config(timeout: u64, bot_token: Option<&str>) -> Result<()> {
     let config_path = Path::new("ralph.yml");
+
+    let robot = serde_yaml::Value::Mapping({
+        let mut m = serde_yaml::Mapping::new();
+        m.insert(
+            serde_yaml::Value::String("enabled".to_string()),
+            serde_yaml::Value::Bool(true),
+        );
+        m.insert(
+            serde_yaml::Value::String("timeout_seconds".to_string()),
+            serde_yaml::Value::Number(serde_yaml::Number::from(timeout)),
+        );
+        if let Some(token) = bot_token {
+            let mut telegram = serde_yaml::Mapping::new();
+            telegram.insert(
+                serde_yaml::Value::String("bot_token".to_string()),
+                serde_yaml::Value::String(token.to_string()),
+            );
+            m.insert(
+                serde_yaml::Value::String("telegram".to_string()),
+                serde_yaml::Value::Mapping(telegram),
+            );
+        }
+        m
+    });
 
     if config_path.exists() {
         // Read existing config as raw YAML value to preserve structure
@@ -682,19 +804,6 @@ fn save_robot_config(timeout: u64) -> Result<()> {
             serde_yaml::from_str(&content).context("Failed to parse ralph.yml")?;
 
         // Update or insert RObot section
-        let robot = serde_yaml::Value::Mapping({
-            let mut m = serde_yaml::Mapping::new();
-            m.insert(
-                serde_yaml::Value::String("enabled".to_string()),
-                serde_yaml::Value::Bool(true),
-            );
-            m.insert(
-                serde_yaml::Value::String("timeout_seconds".to_string()),
-                serde_yaml::Value::Number(serde_yaml::Number::from(timeout)),
-            );
-            m
-        });
-
         if let serde_yaml::Value::Mapping(ref mut map) = doc {
             map.insert(serde_yaml::Value::String("RObot".to_string()), robot);
         }
@@ -703,10 +812,65 @@ fn save_robot_config(timeout: u64) -> Result<()> {
         std::fs::write(config_path, yaml_str).context("Failed to write ralph.yml")?;
     } else {
         // Create minimal config
-        let yaml = format!("RObot:\n  enabled: true\n  timeout_seconds: {}\n", timeout);
+        let yaml = if let Some(token) = bot_token {
+            format!(
+                "RObot:\n  enabled: true\n  timeout_seconds: {}\n  telegram:\n    bot_token: {}\n",
+                timeout, token
+            )
+        } else {
+            format!("RObot:\n  enabled: true\n  timeout_seconds: {}\n", timeout)
+        };
         std::fs::write(config_path, yaml).context("Failed to create ralph.yml")?;
     }
 
+    Ok(())
+}
+
+/// Save only the bot token into a config file, preserving other keys.
+fn save_bot_token_config(path: &Path, token: &str) -> Result<()> {
+    let doc = if path.exists() {
+        let content = std::fs::read_to_string(path).context("Failed to read config file")?;
+        serde_yaml::from_str(&content).context("Failed to parse config file")?
+    } else {
+        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+    };
+
+    let mut root = match doc {
+        serde_yaml::Value::Mapping(map) => map,
+        _ => serde_yaml::Mapping::new(),
+    };
+
+    let robot_key = if root.contains_key("RObot") {
+        serde_yaml::Value::String("RObot".to_string())
+    } else if root.contains_key("robot") {
+        serde_yaml::Value::String("robot".to_string())
+    } else {
+        serde_yaml::Value::String("RObot".to_string())
+    };
+
+    let mut robot_map = match root.get(&robot_key) {
+        Some(serde_yaml::Value::Mapping(map)) => map.clone(),
+        _ => serde_yaml::Mapping::new(),
+    };
+
+    let mut telegram_map = match robot_map.get("telegram") {
+        Some(serde_yaml::Value::Mapping(map)) => map.clone(),
+        _ => serde_yaml::Mapping::new(),
+    };
+    telegram_map.insert(
+        serde_yaml::Value::String("bot_token".to_string()),
+        serde_yaml::Value::String(token.to_string()),
+    );
+    robot_map.insert(
+        serde_yaml::Value::String("telegram".to_string()),
+        serde_yaml::Value::Mapping(telegram_map),
+    );
+
+    root.insert(robot_key, serde_yaml::Value::Mapping(robot_map));
+
+    let yaml_str = serde_yaml::to_string(&serde_yaml::Value::Mapping(root))
+        .context("Failed to serialize config")?;
+    std::fs::write(path, yaml_str).context("Failed to write config file")?;
     Ok(())
 }
 
@@ -733,9 +897,9 @@ fn save_telegram_state(chat_id: i64) -> Result<()> {
     Ok(())
 }
 
-/// Read bot token from config file (legacy).
-fn load_config_bot_token() -> Option<String> {
-    let content = std::fs::read_to_string("ralph.yml").ok()?;
+/// Read bot token from a config file (legacy).
+fn load_config_bot_token_from(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
     let config: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
     config
         .get("RObot")
@@ -744,6 +908,11 @@ fn load_config_bot_token() -> Option<String> {
         .and_then(|t| t.get("bot_token"))
         .and_then(|v| v.as_str())
         .map(String::from)
+}
+
+/// Read bot token from ralph.yml (legacy).
+fn load_config_bot_token() -> Option<String> {
+    load_config_bot_token_from(Path::new("ralph.yml"))
 }
 
 /// Check if RObot is enabled in config.
@@ -842,6 +1011,8 @@ fn print_status(use_colors: bool, msg: &str) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_save_telegram_state_creates_file() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -1016,5 +1187,74 @@ mod tests {
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown error");
         assert_eq!(description, "Unauthorized");
+    }
+
+    #[test]
+    fn test_save_robot_config_with_token_writes_bot_token() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let prev_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        save_robot_config(300, Some("test-token")).unwrap();
+
+        let content = std::fs::read_to_string("ralph.yml").unwrap();
+        let config: serde_yaml::Value = serde_yaml::from_str(&content).unwrap();
+        let token = config
+            .get("RObot")
+            .and_then(|r| r.get("telegram"))
+            .and_then(|t| t.get("bot_token"))
+            .and_then(|v| v.as_str());
+        assert_eq!(token, Some("test-token"));
+
+        std::env::set_current_dir(prev_dir).unwrap();
+    }
+
+    #[test]
+    fn test_load_config_bot_token_from_reads_token() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("custom.yml");
+        let yaml = "RObot:\n  telegram:\n    bot_token: token-123\n";
+        std::fs::write(&config_path, yaml).unwrap();
+
+        let token = load_config_bot_token_from(&config_path);
+        assert_eq!(token.as_deref(), Some("token-123"));
+    }
+
+    #[test]
+    fn test_save_bot_token_config_writes_token() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.yml");
+
+        save_bot_token_config(&config_path, "new-token").unwrap();
+
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let config: serde_yaml::Value = serde_yaml::from_str(&content).unwrap();
+        let token = config
+            .get("RObot")
+            .and_then(|r| r.get("telegram"))
+            .and_then(|t| t.get("bot_token"))
+            .and_then(|v| v.as_str());
+        assert_eq!(token, Some("new-token"));
+    }
+
+    #[test]
+    fn test_save_bot_token_config_preserves_existing() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.yml");
+        let yaml = "cli:\n  backend: claude\nRObot:\n  enabled: true\n";
+        std::fs::write(&config_path, yaml).unwrap();
+
+        save_bot_token_config(&config_path, "new-token").unwrap();
+
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let config: serde_yaml::Value = serde_yaml::from_str(&content).unwrap();
+        assert!(config.get("cli").is_some());
+        let robot = config.get("RObot").unwrap();
+        assert_eq!(robot.get("enabled").and_then(|v| v.as_bool()), Some(true));
+        let token = robot
+            .get("telegram")
+            .and_then(|t| t.get("bot_token"))
+            .and_then(|v| v.as_str());
+        assert_eq!(token, Some("new-token"));
     }
 }

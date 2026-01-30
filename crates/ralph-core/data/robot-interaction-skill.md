@@ -7,6 +7,9 @@ description: Human-in-the-loop interaction via RObot
 
 A human is available via Telegram. You can ask blocking questions or send non-blocking progress updates.
 
+**Hard rule:** Do NOT send `progress` and `interact.human` in the same turn.  
+If you need to ask, include the status in the question and skip the progress update.
+
 ## Progress updates (non-blocking)
 
 Send one-way notifications — the loop does NOT block:

@@ -22,6 +22,7 @@ pub fn handle_command(text: &str, workspace_root: &Path) -> Option<String> {
         "/memories" => Some(cmd_memories(workspace_root)),
         "/tail" => Some(cmd_tail(workspace_root)),
         "/restart" => Some(cmd_restart(workspace_root)),
+        "/stop" => Some(cmd_stop(workspace_root)),
         _ => None,
     }
 }
@@ -58,6 +59,7 @@ fn cmd_help() -> String {
         "/memories — Recent memories",
         "/tail — Last 20 events",
         "/restart — Restart the orchestration loop",
+        "/stop — Stop the orchestration loop",
         "/help — This message",
     ]
     .join("\n")
@@ -361,6 +363,37 @@ fn cmd_restart(workspace_root: &Path) -> String {
         }
         Err(e) => format!(
             "Failed to write restart signal: {}",
+            escape_html(&e.to_string())
+        ),
+    }
+}
+
+/// `/stop` — Request a stop of the orchestration loop.
+///
+/// Writes a signal file (`.ralph/stop-requested`) that the event loop
+/// checks at each iteration boundary. When detected, the loop terminates
+/// gracefully with `TerminationReason::Stopped`.
+fn cmd_stop(workspace_root: &Path) -> String {
+    let stop_path = workspace_root.join(".ralph/stop-requested");
+
+    // Check if a loop is actually running
+    let state = match lock_state(workspace_root) {
+        Ok(state) => state,
+        Err(e) => {
+            return format!(
+                "Failed to check lock state: {}",
+                escape_html(&e.to_string())
+            );
+        }
+    };
+    if state != LockState::Active {
+        return "No active loop to stop.".to_string();
+    }
+
+    match std::fs::write(&stop_path, "") {
+        Ok(()) => "Stop requested. The loop will stop at the next iteration boundary.".to_string(),
+        Err(e) => format!(
+            "Failed to write stop signal: {}",
             escape_html(&e.to_string())
         ),
     }
@@ -726,6 +759,14 @@ mod tests {
         assert!(result.contains("No active loop"));
     }
 
+    #[test]
+    fn cmd_stop_no_active_loop() {
+        let dir = TempDir::new().unwrap();
+        setup_workspace(&dir);
+        let result = cmd_stop(dir.path());
+        assert!(result.contains("No active loop"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn cmd_restart_writes_signal_file() {
@@ -758,6 +799,38 @@ mod tests {
         assert!(restart_path.exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn cmd_stop_writes_signal_file() {
+        use nix::fcntl::{Flock, FlockArg};
+
+        let dir = TempDir::new().unwrap();
+        setup_workspace(&dir);
+
+        // Create lock file to simulate active loop
+        let lock = serde_json::json!({
+            "pid": 12345,
+            "started": "2026-01-30T10:00:00Z",
+            "prompt": "Test prompt"
+        });
+        let lock_path = dir.path().join(".ralph/loop.lock");
+        std::fs::write(&lock_path, serde_json::to_string(&lock).unwrap()).unwrap();
+
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        let _flock = Flock::lock(file, FlockArg::LockExclusiveNonblock).unwrap();
+
+        let result = cmd_stop(dir.path());
+        assert!(result.contains("Stop requested"));
+
+        // Verify signal file was created
+        let stop_path = dir.path().join(".ralph/stop-requested");
+        assert!(stop_path.exists());
+    }
+
     #[test]
     fn handle_command_recognizes_restart() {
         let dir = TempDir::new().unwrap();
@@ -766,8 +839,21 @@ mod tests {
     }
 
     #[test]
+    fn handle_command_recognizes_stop() {
+        let dir = TempDir::new().unwrap();
+        setup_workspace(&dir);
+        assert!(handle_command("/stop", dir.path()).is_some());
+    }
+
+    #[test]
     fn cmd_help_lists_restart() {
         let result = cmd_help();
         assert!(result.contains("/restart"));
+    }
+
+    #[test]
+    fn cmd_help_lists_stop() {
+        let result = cmd_help();
+        assert!(result.contains("/stop"));
     }
 }
