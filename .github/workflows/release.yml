@@ -300,28 +300,29 @@ jobs:
           # Publish crates in dependency order with delays for registry indexing
           # Order: ralph-proto -> ralph-telegram -> ralph-core -> ralph-adapters, ralph-tui -> ralph-cli
 
-          echo "Publishing ralph-proto..."
-          cargo publish -p ralph-proto --no-verify
-          sleep 30
+          publish_crate() {
+            local crate=$1
+            echo "Publishing $crate..."
+            if cargo publish -p "$crate" --no-verify 2>&1; then
+              echo "$crate published successfully"
+            else
+              # Check if it failed because the version already exists (idempotent)
+              if cargo search "$crate" 2>/dev/null | grep -q "^$crate = \"${{ needs.plan.outputs.tag#v }}\""; then
+                echo "$crate@${{ needs.plan.outputs.tag#v }} already published, skipping"
+              else
+                echo "Failed to publish $crate"
+                return 1
+              fi
+            fi
+            sleep 30
+          }
 
-          echo "Publishing ralph-telegram..."
-          cargo publish -p ralph-telegram --no-verify
-          sleep 30
-
-          echo "Publishing ralph-core..."
-          cargo publish -p ralph-core --no-verify
-          sleep 30
-
-          echo "Publishing ralph-adapters..."
-          cargo publish -p ralph-adapters --no-verify
-          sleep 30
-
-          echo "Publishing ralph-tui..."
-          cargo publish -p ralph-tui --no-verify
-          sleep 30
-
-          echo "Publishing ralph-cli..."
-          cargo publish -p ralph-cli --no-verify
+          publish_crate ralph-proto
+          publish_crate ralph-telegram
+          publish_crate ralph-core
+          publish_crate ralph-adapters
+          publish_crate ralph-tui
+          publish_crate ralph-cli
 
           echo "All crates published successfully!"
 
