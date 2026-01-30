@@ -12,6 +12,7 @@
 //! - Code task generation via `ralph code-task`
 //! - Work item tracking via `ralph task`
 
+mod bot;
 mod display;
 mod hats;
 mod init;
@@ -408,6 +409,9 @@ enum Commands {
 
     /// Run the web dashboard
     Web(web::WebArgs),
+
+    /// Manage Telegram bot setup and testing
+    Bot(bot::BotArgs),
 }
 
 /// Arguments for the init subcommand.
@@ -786,6 +790,7 @@ async fn main() -> Result<()> {
             hats::execute(&config_sources, args, cli.color.should_use_colors())
         }
         Some(Commands::Web(args)) => web::execute(args).await,
+        Some(Commands::Bot(args)) => bot::execute(args, cli.color.should_use_colors()).await,
         None => {
             // Default to run with TUI enabled (new default behavior)
             let args = RunArgs {

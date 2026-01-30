@@ -94,11 +94,14 @@ clap = { version = "4", features = ["derive"] }
 regex = "1"
 
 # HTTP client for remote presets
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 # Error handling
 thiserror = "2"
 anyhow = "1"
+
+# OS keychain for secure credential storage
+keyring = { version = "3", features = ["apple-native", "sync-secret-service"] }
 
 # Logging/tracing
 tracing = "0.1"
