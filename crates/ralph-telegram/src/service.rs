@@ -271,7 +271,7 @@ impl TelegramService {
                                     let _ = bot
                                         .send_message(
                                             teloxide::types::ChatId(chat_id),
-                                            "Working on something, but I'll get to it.",
+                                            "📝 <b>Guidance received</b> — will apply next iteration.",
                                         )
                                         .await;
                                 }
@@ -381,7 +381,7 @@ impl TelegramService {
         };
 
         let msg = format!(
-            "Still working — iteration {}, {} elapsed.",
+            "Still working — iteration <b>{}</b>, <code>{}</code> elapsed.",
             iteration, elapsed_str
         );
         self.send_with_retry(chat_id, &msg)
