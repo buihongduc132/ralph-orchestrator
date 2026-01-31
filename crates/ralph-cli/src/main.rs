@@ -13,6 +13,7 @@
 //! - Work item tracking via `ralph task`
 
 mod bot;
+mod doctor;
 mod display;
 mod hats;
 mod init;
@@ -378,6 +379,9 @@ enum Commands {
 
     /// Run preflight checks to validate configuration and environment
     Preflight(preflight::PreflightArgs),
+
+    /// Run first-run diagnostics and environment checks
+    Doctor(doctor::DoctorArgs),
 
     /// DEPRECATED: Use `ralph run --continue` instead.
     /// Resume a previously interrupted loop from existing scratchpad.
@@ -791,6 +795,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Preflight(args)) => {
             preflight::execute(&config_sources, args, cli.color.should_use_colors()).await
+        }
+        Some(Commands::Doctor(args)) => {
+            doctor::execute(&config_sources, args, cli.color.should_use_colors()).await
         }
         Some(Commands::Resume(args)) => {
             resume_command(&config_sources, cli.verbose, cli.color, args).await
@@ -2138,6 +2145,13 @@ mod tests {
                 command: crate::bot::BotCommands::Daemon(_),
             }))
         ));
+    }
+
+    #[test]
+    fn test_doctor_parses_command() {
+        let cli = Cli::try_parse_from(["ralph", "doctor"]).expect("CLI parse failed");
+
+        assert!(matches!(cli.command, Some(Commands::Doctor(_))));
     }
 
     #[test]

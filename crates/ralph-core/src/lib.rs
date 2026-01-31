@@ -54,9 +54,9 @@ pub mod worktree;
 pub use chaos_mode::{CHAOS_COMPLETION_PROMISE, ChaosModeState};
 pub use cli_capture::{CliCapture, CliCapturePair};
 pub use config::{
-    ChaosModeConfig, ChaosOutput, CliConfig, CoreConfig, EventLoopConfig, EventMetadata,
-    FeaturesConfig, HatBackend, HatConfig, InjectMode, MemoriesConfig, MemoriesFilter, RalphConfig,
-    ResearchFocus, SkillOverride, SkillsConfig,
+    ChaosModeConfig, ChaosOutput, CliConfig, ConfigError, CoreConfig, EventLoopConfig,
+    EventMetadata, FeaturesConfig, HatBackend, HatConfig, InjectMode, MemoriesConfig,
+    MemoriesFilter, RalphConfig, ResearchFocus, SkillOverride, SkillsConfig,
 };
 // Re-export loop_name types (also available via FeaturesConfig.loop_naming)
 pub use diagnostics::DiagnosticsCollector;

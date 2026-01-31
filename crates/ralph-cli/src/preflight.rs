@@ -182,7 +182,7 @@ fn print_check_line(check: &CheckResult, name_width: usize, use_colors: bool) {
     }
 }
 
-async fn load_config_for_preflight(config_sources: &[ConfigSource]) -> Result<RalphConfig> {
+pub(crate) async fn load_config_for_preflight(config_sources: &[ConfigSource]) -> Result<RalphConfig> {
     let (primary_sources, overrides): (Vec<_>, Vec<_>) = config_sources
         .iter()
         .partition(|source| !matches!(source, ConfigSource::Override { .. }));
@@ -259,7 +259,7 @@ async fn load_config_for_preflight(config_sources: &[ConfigSource]) -> Result<Ra
     Ok(config)
 }
 
-fn config_source_label(config_sources: &[ConfigSource]) -> String {
+pub(crate) fn config_source_label(config_sources: &[ConfigSource]) -> String {
     let primary = config_sources
         .iter()
         .find(|source| !matches!(source, ConfigSource::Override { .. }));
