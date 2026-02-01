@@ -2288,7 +2288,6 @@ dependencies = [
  "crossterm 0.28.1",
  "futures",
  "insta",
- "ralph-adapters",
  "ralph-core",
  "ralph-proto",
  "ratatui",
