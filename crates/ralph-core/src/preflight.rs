@@ -110,6 +110,7 @@ impl PreflightRunner {
                 Box::new(GitCleanCheck),
                 Box::new(PathsExistCheck),
                 Box::new(ToolsInPathCheck::default()),
+                Box::new(SpecCompletenessCheck),
             ],
         }
     }
@@ -396,6 +397,181 @@ impl PreflightCheck for ToolsInPathCheck {
             )
         }
     }
+}
+
+struct SpecCompletenessCheck;
+
+#[async_trait]
+impl PreflightCheck for SpecCompletenessCheck {
+    fn name(&self) -> &'static str {
+        "specs"
+    }
+
+    async fn run(&self, config: &RalphConfig) -> CheckResult {
+        let specs_dir = config.core.resolve_path(&config.core.specs_dir);
+
+        if !specs_dir.exists() {
+            return CheckResult::pass(self.name(), "No specs directory (skipping)");
+        }
+
+        let spec_files = match collect_spec_files(&specs_dir) {
+            Ok(files) => files,
+            Err(err) => {
+                return CheckResult::fail(
+                    self.name(),
+                    "Unable to read specs directory",
+                    format!("{err}"),
+                );
+            }
+        };
+
+        if spec_files.is_empty() {
+            return CheckResult::pass(self.name(), "No spec files found (skipping)");
+        }
+
+        let mut incomplete: Vec<String> = Vec::new();
+
+        for path in &spec_files {
+            let content = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(err) => {
+                    incomplete.push(format!(
+                        "{}: unreadable ({})",
+                        path.file_name().unwrap_or_default().to_string_lossy(),
+                        err
+                    ));
+                    continue;
+                }
+            };
+
+            if let Some(reason) = check_spec_completeness(path, &content) {
+                incomplete.push(reason);
+            }
+        }
+
+        if incomplete.is_empty() {
+            CheckResult::pass(
+                self.name(),
+                format!(
+                    "{} spec(s) valid with acceptance criteria",
+                    spec_files.len()
+                ),
+            )
+        } else {
+            let total = spec_files.len();
+            CheckResult::warn(
+                self.name(),
+                format!(
+                    "{} of {} spec(s) missing acceptance criteria",
+                    incomplete.len(),
+                    total
+                ),
+                format!(
+                    "Specs should include Given/When/Then acceptance criteria.\n{}",
+                    incomplete.join("\n")
+                ),
+            )
+        }
+    }
+}
+
+/// Recursively collect all `.spec.md` files under a directory.
+fn collect_spec_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    collect_spec_files_recursive(dir, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+fn collect_spec_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_spec_files_recursive(&path, files)?;
+        } else if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".spec.md"))
+        {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// Check whether a spec file has the required sections for Level 5 completeness.
+///
+/// Returns `None` if the spec is complete, or `Some(reason)` if incomplete.
+fn check_spec_completeness(path: &Path, content: &str) -> Option<String> {
+    let filename = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    // Skip specs that are already marked as implemented — they passed review
+    let content_lower = content.to_lowercase();
+    if content_lower.contains("status: implemented") {
+        return None;
+    }
+
+    let has_acceptance = has_acceptance_criteria(content);
+
+    if !has_acceptance {
+        return Some(format!("{filename}: missing acceptance criteria (Given/When/Then)"));
+    }
+
+    None
+}
+
+/// Detect whether content contains Given/When/Then acceptance criteria.
+///
+/// Matches common spec patterns:
+/// - `**Given**` / `**When**` / `**Then**` (bold markdown)
+/// - `Given ` / `When ` / `Then ` at line start (plain text)
+/// - `- Given ` / `- When ` / `- Then ` (list items)
+fn has_acceptance_criteria(content: &str) -> bool {
+    let mut has_given = false;
+    let mut has_when = false;
+    let mut has_then = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        let lower = trimmed.to_lowercase();
+
+        // Bold markdown: **Given**, **When**, **Then**
+        // Plain text at line start: Given, When, Then
+        // List items: - Given, - When, - Then
+        if lower.starts_with("**given**")
+            || lower.starts_with("given ")
+            || lower.starts_with("- given ")
+            || lower.starts_with("- **given**")
+        {
+            has_given = true;
+        }
+        if lower.starts_with("**when**")
+            || lower.starts_with("when ")
+            || lower.starts_with("- when ")
+            || lower.starts_with("- **when**")
+        {
+            has_when = true;
+        }
+        if lower.starts_with("**then**")
+            || lower.starts_with("then ")
+            || lower.starts_with("- then ")
+            || lower.starts_with("- **then**")
+        {
+            has_then = true;
+        }
+
+        if has_given && has_when && has_then {
+            return true;
+        }
+    }
+
+    // Require at least Given+Then (When is sometimes implicit)
+    has_given && has_then
 }
 
 #[derive(Debug)]
@@ -740,5 +916,236 @@ mod tests {
 
         assert_eq!(result.status, CheckStatus::Pass);
         assert!(result.label.contains("skipping"));
+    }
+
+    #[tokio::test]
+    async fn specs_check_skips_when_no_directory() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut config = RalphConfig::default();
+        config.core.workspace_root = temp.path().to_path_buf();
+        config.core.specs_dir = "nonexistent/specs".to_string();
+
+        let check = SpecCompletenessCheck;
+        let result = check.run(&config).await;
+
+        assert_eq!(result.status, CheckStatus::Pass);
+        assert!(result.label.contains("skipping"));
+    }
+
+    #[tokio::test]
+    async fn specs_check_skips_when_empty_directory() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("specs")).expect("create specs dir");
+        let mut config = RalphConfig::default();
+        config.core.workspace_root = temp.path().to_path_buf();
+        config.core.specs_dir = "specs".to_string();
+
+        let check = SpecCompletenessCheck;
+        let result = check.run(&config).await;
+
+        assert_eq!(result.status, CheckStatus::Pass);
+        assert!(result.label.contains("skipping"));
+    }
+
+    #[tokio::test]
+    async fn specs_check_passes_with_complete_spec() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let specs_dir = temp.path().join("specs");
+        std::fs::create_dir_all(&specs_dir).expect("create specs dir");
+        std::fs::write(
+            specs_dir.join("feature.spec.md"),
+            r#"---
+status: draft
+---
+
+# Feature Spec
+
+## Goal
+
+Add a new feature.
+
+## Acceptance Criteria
+
+**Given** the system is running
+**When** the user triggers the feature
+**Then** the expected output is produced
+"#,
+        )
+        .expect("write spec");
+
+        let mut config = RalphConfig::default();
+        config.core.workspace_root = temp.path().to_path_buf();
+        config.core.specs_dir = "specs".to_string();
+
+        let check = SpecCompletenessCheck;
+        let result = check.run(&config).await;
+
+        assert_eq!(result.status, CheckStatus::Pass);
+        assert!(result.label.contains("1 spec(s) valid"));
+    }
+
+    #[tokio::test]
+    async fn specs_check_warns_on_missing_acceptance_criteria() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let specs_dir = temp.path().join("specs");
+        std::fs::create_dir_all(&specs_dir).expect("create specs dir");
+        std::fs::write(
+            specs_dir.join("incomplete.spec.md"),
+            r#"---
+status: draft
+---
+
+# Incomplete Spec
+
+## Goal
+
+Do something.
+
+## Requirements
+
+1. Some requirement
+"#,
+        )
+        .expect("write spec");
+
+        let mut config = RalphConfig::default();
+        config.core.workspace_root = temp.path().to_path_buf();
+        config.core.specs_dir = "specs".to_string();
+
+        let check = SpecCompletenessCheck;
+        let result = check.run(&config).await;
+
+        assert_eq!(result.status, CheckStatus::Warn);
+        assert!(result.label.contains("missing acceptance criteria"));
+        let message = result.message.expect("expected message");
+        assert!(message.contains("incomplete.spec.md"));
+    }
+
+    #[tokio::test]
+    async fn specs_check_skips_implemented_specs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let specs_dir = temp.path().join("specs");
+        std::fs::create_dir_all(&specs_dir).expect("create specs dir");
+        // This spec lacks acceptance criteria but is already implemented
+        std::fs::write(
+            specs_dir.join("done.spec.md"),
+            r#"---
+status: implemented
+---
+
+# Done Spec
+
+## Goal
+
+Already done.
+"#,
+        )
+        .expect("write spec");
+
+        let mut config = RalphConfig::default();
+        config.core.workspace_root = temp.path().to_path_buf();
+        config.core.specs_dir = "specs".to_string();
+
+        let check = SpecCompletenessCheck;
+        let result = check.run(&config).await;
+
+        assert_eq!(result.status, CheckStatus::Pass);
+    }
+
+    #[tokio::test]
+    async fn specs_check_finds_specs_in_subdirectories() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let specs_dir = temp.path().join("specs");
+        let sub_dir = specs_dir.join("adapters");
+        std::fs::create_dir_all(&sub_dir).expect("create subdirectory");
+        std::fs::write(
+            sub_dir.join("adapter.spec.md"),
+            r#"---
+status: draft
+---
+
+# Adapter Spec
+
+## Acceptance Criteria
+
+- **Given** an adapter is configured
+- **When** a request is sent
+- **Then** the adapter responds correctly
+"#,
+        )
+        .expect("write spec");
+
+        let mut config = RalphConfig::default();
+        config.core.workspace_root = temp.path().to_path_buf();
+        config.core.specs_dir = "specs".to_string();
+
+        let check = SpecCompletenessCheck;
+        let result = check.run(&config).await;
+
+        assert_eq!(result.status, CheckStatus::Pass);
+        assert!(result.label.contains("1 spec(s) valid"));
+    }
+
+    #[test]
+    fn has_acceptance_criteria_detects_bold_format() {
+        let content = r#"
+## Acceptance Criteria
+
+**Given** the system is ready
+**When** the user clicks
+**Then** the result appears
+"#;
+        assert!(has_acceptance_criteria(content));
+    }
+
+    #[test]
+    fn has_acceptance_criteria_detects_list_format() {
+        let content = r#"
+## Acceptance Criteria
+
+- Given the system is ready
+- When the user clicks
+- Then the result appears
+"#;
+        assert!(has_acceptance_criteria(content));
+    }
+
+    #[test]
+    fn has_acceptance_criteria_detects_bold_list_format() {
+        let content = r#"
+## Acceptance Criteria
+
+- **Given** the system is ready
+- **When** the user clicks
+- **Then** the result appears
+"#;
+        assert!(has_acceptance_criteria(content));
+    }
+
+    #[test]
+    fn has_acceptance_criteria_requires_given_and_then() {
+        // Only has Given, missing When and Then
+        let content = "**Given** something\n";
+        assert!(!has_acceptance_criteria(content));
+
+        // Has Given and Then (When implicit) — should pass
+        let content = "**Given** something\n**Then** result\n";
+        assert!(has_acceptance_criteria(content));
+    }
+
+    #[test]
+    fn has_acceptance_criteria_rejects_content_without_criteria() {
+        let content = r#"
+# Some Spec
+
+## Goal
+
+Build something.
+
+## Requirements
+
+1. It should work.
+"#;
+        assert!(!has_acceptance_criteria(content));
     }
 }
