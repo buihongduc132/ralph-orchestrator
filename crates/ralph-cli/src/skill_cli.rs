@@ -210,6 +210,32 @@ fn find_workspace_root(start: &Path) -> Option<PathBuf> {
     None
 }
 
+fn find_default_skills_dir(root: &Path) -> Option<PathBuf> {
+    let default_dir = root.join(".claude/skills");
+    if default_dir.is_dir() {
+        return Some(default_dir);
+    }
+
+    let cwd = std::env::current_dir().ok()?;
+    if !cwd.starts_with(root) {
+        return None;
+    }
+
+    let mut current = Some(cwd.as_path());
+    while let Some(dir) = current {
+        let candidate = dir.join(".claude/skills");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        if dir == root {
+            break;
+        }
+        current = dir.parent();
+    }
+
+    None
+}
+
 /// Load config from workspace root, falling back to defaults.
 fn load_config(root: &Path) -> RalphConfig {
     // Try standard config file names
@@ -228,11 +254,14 @@ fn load_config(root: &Path) -> RalphConfig {
     let mut config = config.unwrap_or_default();
     config.normalize();
 
-    if config.skills.dirs.is_empty() {
-        let default_dir = root.join(".claude/skills");
-        if default_dir.is_dir() {
-            config.skills.dirs.push(PathBuf::from(".claude/skills"));
-        }
+    if config.skills.dirs.is_empty()
+        && let Some(default_dir) = find_default_skills_dir(root)
+    {
+        let dir = default_dir
+            .strip_prefix(root)
+            .map(PathBuf::from)
+            .unwrap_or(default_dir);
+        config.skills.dirs.push(dir);
     }
 
     config

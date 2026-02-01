@@ -16,6 +16,16 @@ fn ralph_skill(temp_path: &std::path::Path, args: &[&str]) -> std::process::Outp
         .expect("Failed to execute ralph tools skill command")
 }
 
+fn ralph_skill_no_root(current_path: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_ralph"))
+        .arg("tools")
+        .arg("skill")
+        .args(args)
+        .current_dir(current_path)
+        .output()
+        .expect("Failed to execute ralph tools skill command")
+}
+
 fn write_skill(root: &Path, name: &str, contents: &str) {
     let skill_dir = root.join(".claude").join("skills").join(name);
     fs::create_dir_all(&skill_dir).expect("create skill dir");
@@ -24,6 +34,17 @@ fn write_skill(root: &Path, name: &str, contents: &str) {
 
 fn ralph_skill_ok(temp_path: &std::path::Path, args: &[&str]) -> String {
     let output = ralph_skill(temp_path, args);
+    assert!(
+        output.status.success(),
+        "Command 'ralph tools skill {}' failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+fn ralph_skill_no_root_ok(current_path: &std::path::Path, args: &[&str]) -> String {
+    let output = ralph_skill_no_root(current_path, args);
     assert!(
         output.status.success(),
         "Command 'ralph tools skill {}' failed: {}",
@@ -91,4 +112,41 @@ Loaded from default skills dir.
     let load_stdout = ralph_skill_ok(temp_path, &["load", "test-generation"]);
     assert!(load_stdout.contains("<test-generation-skill>"));
     assert!(load_stdout.contains("Loaded from default skills dir."));
+}
+
+#[test]
+fn test_skill_load_finds_nested_skills_dir_when_root_missing() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let temp_path = temp_dir.path();
+
+    fs::write(
+        temp_path.join("ralph.yml"),
+        "skills:\n  enabled: true\n",
+    )
+    .expect("write ralph.yml");
+
+    let repo_dir = temp_path.join("repo");
+    let nested_dir = repo_dir.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+
+    write_skill(
+        &repo_dir,
+        "test-generation",
+        r"---
+name: test-generation
+description: Test generation skill
+---
+
+# Test Generation
+
+Loaded from nested skills dir.
+",
+    );
+
+    let list_stdout = ralph_skill_no_root_ok(&nested_dir, &["list", "--format", "quiet"]);
+    let list_lines: Vec<&str> = list_stdout.lines().collect();
+    assert!(list_lines.contains(&"test-generation"));
+
+    let load_stdout = ralph_skill_no_root_ok(&nested_dir, &["load", "test-generation"]);
+    assert!(load_stdout.contains("Loaded from nested skills dir."));
 }
