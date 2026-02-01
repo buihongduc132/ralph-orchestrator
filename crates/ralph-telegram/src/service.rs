@@ -741,6 +741,49 @@ impl TelegramService {
     }
 }
 
+impl ralph_proto::RobotService for TelegramService {
+    fn send_question(&self, payload: &str) -> anyhow::Result<i32> {
+        Ok(TelegramService::send_question(self, payload)?)
+    }
+
+    fn wait_for_response(&self, events_path: &Path) -> anyhow::Result<Option<String>> {
+        Ok(TelegramService::wait_for_response(self, events_path)?)
+    }
+
+    fn send_checkin(
+        &self,
+        iteration: u32,
+        elapsed: Duration,
+        context: Option<&ralph_proto::CheckinContext>,
+    ) -> anyhow::Result<i32> {
+        // Convert ralph_proto::CheckinContext to the local CheckinContext
+        let local_context = context.map(|ctx| CheckinContext {
+            current_hat: ctx.current_hat.clone(),
+            open_tasks: ctx.open_tasks,
+            closed_tasks: ctx.closed_tasks,
+            cumulative_cost: ctx.cumulative_cost,
+        });
+        Ok(TelegramService::send_checkin(
+            self,
+            iteration,
+            elapsed,
+            local_context.as_ref(),
+        )?)
+    }
+
+    fn timeout_secs(&self) -> u64 {
+        self.timeout_secs
+    }
+
+    fn shutdown_flag(&self) -> Arc<AtomicBool> {
+        self.shutdown.clone()
+    }
+
+    fn stop(self: Box<Self>) {
+        TelegramService::stop(*self);
+    }
+}
+
 impl fmt::Debug for TelegramService {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TelegramService")

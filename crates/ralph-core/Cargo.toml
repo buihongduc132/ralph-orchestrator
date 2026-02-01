@@ -13,7 +13,6 @@ workspace = true
 
 [dependencies]
 ralph-proto.workspace = true
-ralph-telegram.workspace = true
 
 tokio.workspace = true
 async-trait.workspace = true

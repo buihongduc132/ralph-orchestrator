@@ -145,8 +145,16 @@ pub async fn run_loop_impl(
     // Initialize event loop with context for proper path resolution
     let mut event_loop = EventLoop::with_context(config.clone(), ctx.clone());
 
-    // Capture the Telegram shutdown flag so signal handlers can interrupt wait_for_response()
-    let telegram_shutdown = event_loop.telegram_shutdown_flag();
+    // Inject robot service (Telegram) for human-in-the-loop communication
+    if config.robot.enabled
+        && ctx.is_primary()
+        && let Some(service) = create_robot_service(&config, &ctx)
+    {
+        event_loop.set_robot_service(service);
+    }
+
+    // Capture the robot service shutdown flag so signal handlers can interrupt wait_for_response()
+    let robot_shutdown = event_loop.robot_shutdown_flag();
 
     // For resume mode, we initialize with a different event topic
     // This tells the planner to read existing scratchpad rather than creating a new one
@@ -272,11 +280,11 @@ pub async fn run_loop_impl(
 
     // Spawn task to listen for SIGINT (Ctrl+C)
     let interrupt_tx_sigint = interrupt_tx.clone();
-    let telegram_shutdown_sigint = telegram_shutdown.clone();
+    let robot_shutdown_sigint = robot_shutdown.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
             debug!("Interrupt received (SIGINT), terminating immediately...");
-            if let Some(ref flag) = telegram_shutdown_sigint {
+            if let Some(ref flag) = robot_shutdown_sigint {
                 flag.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             let _ = interrupt_tx_sigint.send(true);
@@ -287,14 +295,14 @@ pub async fn run_loop_impl(
     #[cfg(unix)]
     {
         let interrupt_tx_sigterm = interrupt_tx.clone();
-        let telegram_shutdown_sigterm = telegram_shutdown.clone();
+        let robot_shutdown_sigterm = robot_shutdown.clone();
         tokio::spawn(async move {
             let mut sigterm =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                     .expect("Failed to register SIGTERM handler");
             sigterm.recv().await;
             debug!("SIGTERM received, terminating immediately...");
-            if let Some(ref flag) = telegram_shutdown_sigterm {
+            if let Some(ref flag) = robot_shutdown_sigterm {
                 flag.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             let _ = interrupt_tx_sigterm.send(true);
@@ -305,13 +313,13 @@ pub async fn run_loop_impl(
     #[cfg(unix)]
     {
         let interrupt_tx_sighup = interrupt_tx.clone();
-        let telegram_shutdown_sighup = telegram_shutdown.clone();
+        let robot_shutdown_sighup = robot_shutdown.clone();
         tokio::spawn(async move {
             let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
                 .expect("Failed to register SIGHUP handler");
             sighup.recv().await;
             warn!("SIGHUP received (terminal closed), terminating immediately...");
-            if let Some(ref flag) = telegram_shutdown_sighup {
+            if let Some(ref flag) = robot_shutdown_sighup {
                 flag.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             let _ = interrupt_tx_sighup.send(true);
@@ -1641,6 +1649,42 @@ pub async fn start_loop(
         None,       // default auto-merge
     )
     .await
+}
+
+/// Creates a robot service (Telegram) for human-in-the-loop communication.
+///
+/// Called by `run_loop_impl` when `robot.enabled` is true and this is the primary loop.
+/// Returns `None` if the service cannot be created or started.
+fn create_robot_service(
+    config: &RalphConfig,
+    context: &LoopContext,
+) -> Option<Box<dyn ralph_proto::RobotService>> {
+    let workspace_root = context.workspace().to_path_buf();
+    let bot_token = config.robot.resolve_bot_token();
+    let timeout_secs = config.robot.timeout_seconds.unwrap_or(300);
+    let loop_id = context
+        .loop_id()
+        .map(String::from)
+        .unwrap_or_else(|| "main".to_string());
+
+    match ralph_telegram::TelegramService::new(workspace_root, bot_token, timeout_secs, loop_id) {
+        Ok(service) => {
+            if let Err(e) = service.start() {
+                warn!(error = %e, "Failed to start robot service");
+                return None;
+            }
+            info!(
+                bot_token = %service.bot_token_masked(),
+                timeout_secs = service.timeout_secs(),
+                "Robot human-in-the-loop service active"
+            );
+            Some(Box::new(service))
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to create robot service");
+            None
+        }
+    }
 }
 
 #[cfg(test)]
