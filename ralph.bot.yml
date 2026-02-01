@@ -130,5 +130,5 @@ skills:
   dirs:
     - ".claude/skills"
   overrides:
-    ralph-diagnostics:
+    ralph-operations:
       auto_inject: true
