@@ -233,6 +233,17 @@ fn find_default_skills_dir(root: &Path) -> Option<PathBuf> {
         current = dir.parent();
     }
 
+    // Fallback: if the workspace root is nested (ralph.yml inside a subdir),
+    // allow discovering a parent-level .claude/skills directory.
+    let mut current = root.parent();
+    while let Some(dir) = current {
+        let candidate = dir.join(".claude/skills");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        current = dir.parent();
+    }
+
     None
 }
 
