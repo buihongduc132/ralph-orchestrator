@@ -93,9 +93,9 @@ fn test_skill_list_and_load_user_skill_from_default_dir() {
 
     write_skill(
         temp_path,
-        "test-generation",
+        "test-driven-development",
         r"---
-name: test-generation
+name: test-driven-development
 description: Test generation skill
 ---
 
@@ -107,10 +107,10 @@ Loaded from default skills dir.
 
     let list_stdout = ralph_skill_ok(temp_path, &["list", "--format", "quiet"]);
     let list_lines: Vec<&str> = list_stdout.lines().collect();
-    assert!(list_lines.contains(&"test-generation"));
+    assert!(list_lines.contains(&"test-driven-development"));
 
-    let load_stdout = ralph_skill_ok(temp_path, &["load", "test-generation"]);
-    assert!(load_stdout.contains("<test-generation-skill>"));
+    let load_stdout = ralph_skill_ok(temp_path, &["load", "test-driven-development"]);
+    assert!(load_stdout.contains("<test-driven-development-skill>"));
     assert!(load_stdout.contains("Loaded from default skills dir."));
 }
 
@@ -131,9 +131,9 @@ fn test_skill_load_finds_nested_skills_dir_when_root_missing() {
 
     write_skill(
         &repo_dir,
-        "test-generation",
+        "test-driven-development",
         r"---
-name: test-generation
+name: test-driven-development
 description: Test generation skill
 ---
 
@@ -145,9 +145,9 @@ Loaded from nested skills dir.
 
     let list_stdout = ralph_skill_no_root_ok(&nested_dir, &["list", "--format", "quiet"]);
     let list_lines: Vec<&str> = list_stdout.lines().collect();
-    assert!(list_lines.contains(&"test-generation"));
+    assert!(list_lines.contains(&"test-driven-development"));
 
-    let load_stdout = ralph_skill_no_root_ok(&nested_dir, &["load", "test-generation"]);
+    let load_stdout = ralph_skill_no_root_ok(&nested_dir, &["load", "test-driven-development"]);
     assert!(load_stdout.contains("Loaded from nested skills dir."));
 }
 
@@ -169,9 +169,9 @@ fn test_skill_load_finds_parent_skills_dir_when_root_nested() {
 
     write_skill(
         &repo_dir,
-        "test-generation",
+        "test-driven-development",
         r"---
-name: test-generation
+name: test-driven-development
 description: Test generation skill
 ---
 
@@ -183,9 +183,9 @@ Loaded from parent skills dir.
 
     let list_stdout = ralph_skill_no_root_ok(&nested_dir, &["list", "--format", "quiet"]);
     let list_lines: Vec<&str> = list_stdout.lines().collect();
-    assert!(list_lines.contains(&"test-generation"));
+    assert!(list_lines.contains(&"test-driven-development"));
 
-    let load_stdout = ralph_skill_no_root_ok(&nested_dir, &["load", "test-generation"]);
+    let load_stdout = ralph_skill_no_root_ok(&nested_dir, &["load", "test-driven-development"]);
     assert!(load_stdout.contains("Loaded from parent skills dir."));
 }
 
@@ -207,9 +207,9 @@ fn test_skill_load_finds_parent_skills_dir_when_configured_root_missing() {
 
     write_skill(
         &repo_dir,
-        "test-generation",
+        "test-driven-development",
         r"---
-name: test-generation
+name: test-driven-development
 description: Test generation skill
 ---
 
@@ -221,8 +221,8 @@ Loaded from configured parent skills dir.
 
     let list_stdout = ralph_skill_no_root_ok(&nested_dir, &["list", "--format", "quiet"]);
     let list_lines: Vec<&str> = list_stdout.lines().collect();
-    assert!(list_lines.contains(&"test-generation"));
+    assert!(list_lines.contains(&"test-driven-development"));
 
-    let load_stdout = ralph_skill_no_root_ok(&nested_dir, &["load", "test-generation"]);
+    let load_stdout = ralph_skill_no_root_ok(&nested_dir, &["load", "test-driven-development"]);
     assert!(load_stdout.contains("Loaded from configured parent skills dir."));
 }

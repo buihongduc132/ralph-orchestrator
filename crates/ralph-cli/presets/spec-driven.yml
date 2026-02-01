@@ -66,8 +66,8 @@ hats:
 
       ### Process: Stubs → Explore → Plan → Implement → Verify
 
-      0. **GENERATE TEST STUBS** — Start with the spec-to-test skill
-         - Use the `spec-to-test` skill to extract all Given/When/Then criteria
+      0. **GENERATE TEST STUBS** — Start with the test-driven-development skill (Mode A: From Spec)
+         - Use the `test-driven-development` skill to extract all Given/When/Then criteria
          - Generate one test stub per criterion (stubs use `todo!()` to fail)
          - Verify stubs compile: `cargo test --no-run`
          - This is your red phase — all stubs should fail

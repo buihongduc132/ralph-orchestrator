@@ -696,11 +696,11 @@ mod tests {
         let skill_dir = repo_dir
             .join(".claude")
             .join("skills")
-            .join("test-generation");
+            .join("test-driven-development");
         fs::create_dir_all(&skill_dir).unwrap();
         fs::write(
             skill_dir.join("SKILL.md"),
-            "---\nname: test-generation\ndescription: Test generation skill\n---\n\nSkill content.\n",
+            "---\nname: test-driven-development\ndescription: Test generation skill\n---\n\nSkill content.\n",
         )
         .unwrap();
 
@@ -711,6 +711,6 @@ mod tests {
         };
 
         let registry = SkillRegistry::from_config(&config, &workspace_dir, None).unwrap();
-        assert!(registry.get("test-generation").is_some());
+        assert!(registry.get("test-driven-development").is_some());
     }
 }
