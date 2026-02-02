@@ -232,7 +232,11 @@ impl CliBackend {
     pub fn codex() -> Self {
         Self {
             command: "codex".to_string(),
-            args: vec!["exec".to_string(), "--full-auto".to_string()],
+            args: vec![
+                "exec".to_string(),
+                "--yolo".to_string(),
+                "--full-auto".to_string(),
+            ],
             prompt_mode: PromptMode::Arg,
             prompt_flag: None, // Positional argument
             output_format: OutputFormat::Text,
@@ -654,7 +658,7 @@ mod tests {
         let (cmd, args, stdin, _temp) = backend.build_command("test prompt", false);
 
         assert_eq!(cmd, "codex");
-        assert_eq!(args, vec!["exec", "--full-auto", "test prompt"]);
+        assert_eq!(args, vec!["exec", "--yolo", "--full-auto", "test prompt"]);
         assert!(stdin.is_none());
     }
 
@@ -740,7 +744,7 @@ mod tests {
         let (cmd, args, stdin, _temp) = backend.build_command("test prompt", true);
 
         assert_eq!(cmd, "codex");
-        assert_eq!(args, vec!["exec", "test prompt"]);
+        assert_eq!(args, vec!["exec", "--yolo", "test prompt"]);
         assert!(stdin.is_none());
         assert!(!args.contains(&"--full-auto".to_string()));
     }
