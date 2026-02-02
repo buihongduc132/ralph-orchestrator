@@ -17,6 +17,7 @@ use crate::instructions::InstructionBuilder;
 use crate::loop_context::LoopContext;
 use crate::memory_store::{MarkdownMemoryStore, format_memories_as_markdown, truncate_to_budget};
 use crate::skill_registry::SkillRegistry;
+use crate::text::floor_char_boundary;
 use ralph_proto::{CheckinContext, Event, EventBus, Hat, HatId, RobotService};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1084,11 +1085,10 @@ impl EventLoop {
         // Budget: 4000 tokens ~16000 chars. Keep the TAIL (most recent content).
         let char_budget = 4000 * 4;
         let content = if content.len() > char_budget {
-            // Find a line boundary near the start of the tail (ensure UTF-8 boundary)
-            let mut start = content.len() - char_budget;
-            while start < content.len() && !content.is_char_boundary(start) {
-                start += 1;
-            }
+            // Find a line boundary near the start of the tail
+            let start = content.len() - char_budget;
+            // Ensure we start at a valid UTF-8 character boundary
+            let start = floor_char_boundary(&content, start);
             let line_start = content[start..].find('\n').map_or(start, |n| start + n + 1);
             let discarded = &content[..line_start];
 
