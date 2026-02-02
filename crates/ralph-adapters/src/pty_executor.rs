@@ -1010,7 +1010,7 @@ impl PtyExecutor {
                 let exit_code = status.exit_code() as i32;
                 debug!(exit_status = ?status, exit_code, "Child process exited");
 
-                // Drain remaining output from channel
+                // Drain remaining output already buffered.
                 while let Ok(event) = output_rx.try_recv() {
                     if let OutputEvent::Data(data) = event {
                         if !tui_connected {
@@ -1018,6 +1018,31 @@ impl PtyExecutor {
                             io::stdout().flush()?;
                         }
                         output.extend_from_slice(&data);
+                    }
+                }
+
+                // Give the reader thread a brief window to flush any final bytes/EOF.
+                // This avoids races where fast-exiting commands drop output before we return.
+                let drain_deadline = Instant::now() + Duration::from_millis(200);
+                loop {
+                    let remaining = drain_deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    match tokio::time::timeout(remaining, output_rx.recv()).await {
+                        Ok(Some(OutputEvent::Data(data))) => {
+                            if !tui_connected {
+                                io::stdout().write_all(&data)?;
+                                io::stdout().flush()?;
+                            }
+                            output.extend_from_slice(&data);
+                        }
+                        Ok(Some(OutputEvent::Eof)) | Ok(None) => break,
+                        Ok(Some(OutputEvent::Error(e))) => {
+                            debug!(error = %e, "PTY read error after exit");
+                            break;
+                        }
+                        Err(_) => break, // timeout
                     }
                 }
 
