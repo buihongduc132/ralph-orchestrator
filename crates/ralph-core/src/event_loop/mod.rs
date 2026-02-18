@@ -220,6 +220,7 @@ impl EventLoop {
             config.core.clone(),
             &registry,
             config.event_loop.starting_event.clone(),
+            config.event_loop.initial_prompt_template.clone(),
         )
         .with_memories_enabled(config.memories.enabled)
         .with_skill_index(skill_index);
@@ -314,6 +315,7 @@ impl EventLoop {
             config.core.clone(),
             &registry,
             config.event_loop.starting_event.clone(),
+            config.event_loop.initial_prompt_template.clone(),
         )
         .with_memories_enabled(config.memories.enabled)
         .with_skill_index(skill_index);

@@ -602,6 +602,29 @@ pub struct EventLoopConfig {
     /// max_cost), consecutive failures, or explicit interrupt/stop.
     #[serde(default)]
     pub persistent: bool,
+
+    /// Custom initial prompt template to inject at the start of each iteration.
+    ///
+    /// When set, this replaces the default core prompt (ORIENTATION, SCRATCHPAD,
+    /// STATE MANAGEMENT, GUARDRAILS sections) that Ralph injects into every
+    /// iteration. Use this to customize Ralph's baseline behavior.
+    ///
+    /// Template variables (will be substituted):
+    /// - `{scratchpad}` - Path to the scratchpad file
+    /// - `{guardrails}` - Guardrails from core config (joined by newlines)
+    ///
+    /// Example:
+    /// ```yaml
+    /// event_loop:
+    ///   initial_prompt_template: |
+    ///     ## CUSTOM ORIENTATION
+    ///     You are a specialized assistant.
+    ///     
+    ///     ## SCRATCHPAD
+    ///     Path: {scratchpad}
+    /// ```
+    #[serde(default)]
+    pub initial_prompt_template: Option<String>,
 }
 
 fn default_prompt_file() -> String {
@@ -639,6 +662,7 @@ impl Default for EventLoopConfig {
             starting_event: None,
             mutation_score_warn_threshold: None,
             persistent: false,
+            initial_prompt_template: None,
         }
     }
 }
@@ -1921,6 +1945,34 @@ cli:
         assert!(msg.contains("cli.command"));
         assert!(msg.contains("ralph init --backend custom"));
         assert!(msg.contains("docs/reference/troubleshooting.md#custom-backend-command"));
+    }
+
+    #[test]
+    fn test_config_deserializes_initial_prompt_template() {
+        let yaml = r#"
+event_loop:
+  initial_prompt_template: "Custom prompt: {scratchpad}"
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            config.event_loop.initial_prompt_template,
+            Some("Custom prompt: {scratchpad}".to_string())
+        );
+    }
+
+    #[test]
+    fn test_config_default_initial_prompt_template_none() {
+        let config = EventLoopConfig::default();
+        assert_eq!(config.initial_prompt_template, None);
+    }
+
+    #[test]
+    fn test_config_allows_initial_prompt_template_override() {
+        let config = EventLoopConfig {
+            initial_prompt_template: Some("Test template".to_string()),
+            ..EventLoopConfig::default()
+        };
+        assert_eq!(config.initial_prompt_template, Some("Test template".to_string()));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 #![cfg(feature = "recording")]
 //! Integration tests for the smoke test replay runner.
 
-use ralph_core::testing::{SmokeRunner, SmokeTestConfig, TerminationReason, list_fixtures};
+use ralph_core::testing::{list_fixtures, SmokeRunner, SmokeTestConfig, TerminationReason};
 use std::path::PathBuf;
 
 /// Returns the path to the test fixtures directory.
@@ -180,8 +180,8 @@ fn test_all_discovered_fixtures_are_valid() {
 
 mod regression_detection {
     use super::*;
-    use ralph_core::Record;
     use ralph_core::testing::{ReplayBackend, SmokeTestError};
+    use ralph_core::Record;
     use ralph_proto::TerminalWrite;
     use std::io::Write;
     use std::time::Duration;
@@ -1054,6 +1054,7 @@ mod skills_smoke_tests {
             ralph_config.core.clone(),
             &hat_registry,
             None,
+            None,
         )
         .with_skill_index(skill_index);
 
@@ -1192,6 +1193,7 @@ skills:
             "LOOP_COMPLETE",
             ralph_config.core.clone(),
             &hat_registry,
+            None,
             None,
         )
         .with_skill_index(String::new()); // Empty index = skills disabled
